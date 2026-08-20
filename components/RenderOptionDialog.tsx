@@ -68,7 +68,7 @@ export default function RenderOptionDialog({
         onClick={() => setOpen(true)}
         className="inline-flex w-full items-center justify-center gap-2 rounded bg-brand-blue px-4 py-3 text-sm font-bold text-on-dark transition-colors hover:bg-brand-blue-hover"
       >
-        <Clapperboard className="h-4 w-4" aria-hidden />이 편성으로 렌더하기
+        <Clapperboard className="h-4 w-4" aria-hidden />이 편성으로 하이라이트 만들기
       </button>
 
       {open && (
@@ -83,10 +83,10 @@ export default function RenderOptionDialog({
         >
           <div className="w-full max-w-md rounded-lg bg-surface p-7">
             <h2 id="render-title" className="text-lg font-bold">
-              영상으로 만들기
+              하이라이트 영상 만들기
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-text-secondary">
-              편성한 {clipCount}개 클립을 하나의 영상으로 이어붙입니다. 완성까지 몇 분 정도 걸립니다.
+              편성한 {clipCount}개 클립을 하나의 하이라이트 영상으로 이어붙입니다. 완성까지 몇 분 정도 걸립니다.
             </p>
 
             <div className="mt-6 flex items-center gap-3 rounded bg-surface-alt p-4">
@@ -146,7 +146,7 @@ export default function RenderOptionDialog({
                 ) : (
                   <>
                     <Clapperboard className="h-4 w-4" aria-hidden />
-                    영상 만들기
+                    하이라이트 만들기
                   </>
                 )}
               </button>

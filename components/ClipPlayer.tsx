@@ -179,7 +179,8 @@ export default function ClipPlayer({
                 mode === "render" ? "bg-ink font-bold text-on-dark" : "text-text-secondary hover:text-text-primary"
               }`}
             >
-              {renderUrl ? "렌더 영상" : "렌더 영상 없음"}
+              {/* "렌더"는 내부 용어다 — 화면에는 사용자가 아는 말로만 쓴다. */}
+              {renderUrl ? "하이라이트 영상" : "하이라이트 영상 없음"}
             </button>
           </div>
 
@@ -290,7 +291,7 @@ export default function ClipPlayer({
           {!renderUrl && compose.status === "ok" && clips.length > 0 && (
             <div className="shrink-0 rounded-lg border border-line p-4">
               <p className="mb-3 text-xs text-text-secondary">
-                아직 이어붙인 영상이 없습니다. 하나의 MP4 로 만들면 내려받을 수 있습니다.
+                아직 하이라이트 영상이 없습니다. 하나로 이어붙여 만들면 내려받을 수 있습니다.
               </p>
               <RenderOptionDialog
                 compId={compose.compId}

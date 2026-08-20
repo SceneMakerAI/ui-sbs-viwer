@@ -8,11 +8,15 @@
  *   · ⚠️ **단일 프로세스 전제.** PM2 클러스터·다중 인스턴스로 띄우면 이 잠금은 무력하다
  *     (배포는 systemd 단일 프로세스로 고정 — DEPLOY_GUIDE.md).
  *   · 잠금은 반드시 finally 에서 해제하고, 비정상 상황 대비로 획득 시각 기준 자동 만료를 둔다.
+ *   · 해제를 **브라우저 폴링에 의존하지 않는다.** 접수 즉시 서버가 스스로 잡을 감시해
+ *     (`watch()`), 탭을 닫든 새로고침하든 잡이 끝나는 즉시 푼다. TTL 은 그 감시마저
+ *     실패했을 때의 마지막 빗장으로 남는다.
  *
  * server-only.
  */
 import "server-only";
 import { createLogger } from "./log";
+import { findComposeSince } from "./composes";
 import { sanitizeCodeText } from "@/lib/domain/status";
 
 const log = createLogger("compose-agent");
@@ -45,6 +49,7 @@ const LOCK_TTL_MS =
 function activeLock(): Lock | null {
   if (lock && Date.now() - lock.since > LOCK_TTL_MS) {
     log.warn("편성 잠금 자동 만료 — 강제 해제", { jobId: lock.jobId, vId: lock.vId });
+    stopWatch();
     lock = null;
   }
   return lock;
@@ -57,7 +62,81 @@ export function busyState(): { busy: boolean; since: string | null } {
 }
 
 export function releaseLock(jobId: string): void {
+  if (watched === jobId) stopWatch();
   if (lock?.jobId === jobId) lock = null;
+}
+
+/* ── 서버측 잡 감시 ─────────────────────────────────────────────── */
+
+/**
+ * 감시 주기(ms). agent-compose 는 같은 서버(127.0.0.1)라 조회 비용이 사실상 없다.
+ *
+ * 이 감시가 없으면 잠금 해제가 **브라우저 폴링에만** 달린다. 탭을 닫거나 새로고침하거나
+ * 모바일에서 백그라운드로 밀려 타이머가 멈추면, 잡이 1분 만에 끝나도 다음 사람은
+ * TTL(22분)이 지나기 전까지 "대기 중"만 본다 — 2026-08-20 실제로 겪은 상황이다.
+ */
+const WATCH_MS = 5_000;
+
+let watchTimer: ReturnType<typeof setInterval> | null = null;
+let watched: string | null = null;
+
+function stopWatch(): void {
+  if (watchTimer) clearInterval(watchTimer);
+  watchTimer = null;
+  watched = null;
+}
+
+/**
+ * 끝난 잡의 결말 — agent 가 잡 캐시를 비운 뒤에도 화면에 결과를 전할 수 있게 남긴다.
+ * 최근 것만 있으면 되므로 크기를 제한한다.
+ */
+const finished = new Map<string, JobStatus>();
+const FINISHED_MAX = 20;
+
+function remember(jobId: string, st: JobStatus): void {
+  finished.set(jobId, st);
+  while (finished.size > FINISHED_MAX) {
+    const oldest = finished.keys().next().value;
+    if (oldest === undefined) break;
+    finished.delete(oldest);
+  }
+}
+
+/** 접수한 잡을 서버가 직접 따라간다 — 끝나는 즉시 잠금을 푼다. */
+function watch(jobId: string, vId: number, since: number): void {
+  stopWatch();
+  watched = jobId;
+
+  const tick = async () => {
+    if (lock?.jobId !== jobId) return stopWatch(); // 이미 남의 잡이거나 풀렸다
+    try {
+      // pollJob 이 종료를 보면 잠금 해제·결말 기록까지 한다.
+      const st = await pollJob(jobId);
+      if (st.status !== "running") stopWatch();
+    } catch (e) {
+      // 잡 캐시가 사라졌으면(404) agent 는 더 알려줄 게 없다 — DB 로 결말을 판정한다.
+      // 편성이 성공했다면 t_compose 에 행이 남아 있다. 없으면 실패로 본다
+      // (이 시점엔 agent 가 잡을 모르니 "아직 진행 중"일 수는 없다).
+      if (e instanceof AgentError && e.status === 404) {
+        const compId = await findComposeSince(vId, new Date(since)).catch(() => null);
+        remember(
+          jobId,
+          compId != null
+            ? { status: "ok", progress: [], compId }
+            : { status: "error", progress: [], error: "편성이 중단됐습니다. 다시 시도해 주세요." },
+        );
+        log.warn("잡 조회 불가 — DB 로 결말 판정", { jobId, vId, compId });
+        releaseLock(jobId); // stopWatch 포함
+        return;
+      }
+      // 일시적 오류(타임아웃 등)는 다음 주기에 다시 본다. 그래도 안 되면 TTL 이 받아준다.
+      log.warn("잡 감시 실패 — 다음 주기에 재시도", { jobId, message: String(e) });
+    }
+  };
+
+  watchTimer = setInterval(() => void tick(), WATCH_MS);
+  // 감시 타이머가 프로세스 종료를 붙들지 않게 한다.
+  (watchTimer as unknown as { unref?: () => void }).unref?.();
 }
 
 /** 편성이 진행 중이라 요청을 받을 수 없을 때 던진다. 라우트가 409 로 변환한다. */
@@ -176,6 +255,8 @@ export async function startCompose(p: StartComposeParams): Promise<{ jobId: stri
     );
     lock = { jobId: res.job_id, vId: p.vId, since: Date.now() };
     log.info("편성 접수", { vId: p.vId, jobId: res.job_id, budgetSec: p.budgetSec, bumper: p.bumper });
+    // 화면이 폴링해 주지 않아도 서버가 끝을 확인하고 잠금을 푼다.
+    watch(res.job_id, p.vId, lock.since);
     return { jobId: res.job_id };
   } catch (e) {
     lock = null; // 접수 자체가 실패했으면 잠글 이유가 없다
@@ -190,24 +271,31 @@ export interface JobStatus {
   error?: string;
 }
 
-/** 잡 폴링. 완료(성공·실패)면 잠금을 해제한다. */
+/** 잡 폴링. 완료(성공·실패)면 잠금을 해제하고 결말을 기억한다. */
 export async function pollJob(jobId: string): Promise<JobStatus> {
+  // 이미 끝난 잡이면 agent 에 다시 묻지 않는다 — 잡 캐시가 비워졌어도 결말을 돌려준다.
+  const done = finished.get(jobId);
+  if (done) return done;
+
   const job = await request<{
     status: string; progress?: string[]; comp_id?: number; error?: string;
   }>(`/compose/${jobId}`, { method: "GET" }, 15_000);
 
   const status = job.status as JobStatus["status"];
-  if (status !== "running") {
-    releaseLock(jobId);
-    log.info("편성 종료", { jobId, status, compId: job.comp_id });
-  }
-
-  return {
+  const result: JobStatus = {
     status,
     progress: (job.progress ?? []).map(progressLabel),
     compId: job.comp_id,
     error: job.error,
   };
+
+  if (status !== "running") {
+    remember(jobId, result);
+    releaseLock(jobId);
+    log.info("편성 종료", { jobId, status, compId: job.comp_id });
+  }
+
+  return result;
 }
 
 /**

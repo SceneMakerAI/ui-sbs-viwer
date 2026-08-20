@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { BUDGET_OPTIONS, DEFAULT_BUDGET_SEC } from "@/lib/domain/budget";
 
-const EXAMPLES = ["홈런 모음", "이닝별 최고의 수비", "역전 장면만", "득점 장면 전체"];
+const EXAMPLES = ["홈런 모음", "이닝별 하이라이트", "역전 장면만", "득점 장면"];
 
 /** 진행 폴링 주기(ms). 편성은 1~3분 걸린다. */
 const POLL_MS = 3000;
@@ -95,7 +95,17 @@ export default function ComposeForm({ vId }: { vId: number }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ vId, query: query.trim(), budgetSec, bumper }),
       });
-      const j = await r.json();
+      // 게이트웨이(nginx)가 끼어들면 본문이 HTML 이라 JSON 파싱이 터진다 —
+      // 그때도 상태 코드로 상황을 구분해야 해서 파싱 실패를 삼킨다.
+      const j: { code?: string; error?: string; jobId?: string } = await r
+        .json()
+        .catch(() => ({}));
+
+      if (r.status === 429 || r.status === 503) {
+        setError("요청이 잠시 몰렸습니다. 잠시 후 다시 시도해 주세요.");
+        setPhase("idle");
+        return;
+      }
 
       if (r.status === 409 && j.code === "COMPOSE_BUSY") {
         // 거절이 아니라 대기다 — 순서가 되면 자동으로 시작한다.
@@ -110,6 +120,11 @@ export default function ComposeForm({ vId }: { vId: number }) {
         return;
       }
 
+      if (!j.jobId) {
+        setError("편성 요청에 실패했습니다.");
+        setPhase("idle");
+        return;
+      }
       jobRef.current = j.jobId;
       setPhase("running");
       setProgress([]);

@@ -172,6 +172,26 @@ export async function getThumbSec(vId: number, compId?: number): Promise<number 
   return rows[0] ? Number(rows[0].start) : null;
 }
 
+/**
+ * `since` 이후에 이 영상으로 만들어진 편성 중 가장 최근 것.
+ *
+ * 편성 잠금 감시(`compose-agent.ts`)가 agent 에게 잡 상태를 못 물었을 때(잡 캐시 소멸 등)
+ * "그래도 편성이 만들어졌는가"를 DB 로 확인하는 용도다. 행이 없다고 실패는 아니고
+ * **아직 진행 중일 수도** 있으므로, 이 함수만으로 실패를 단정하지 않는다.
+ */
+export async function findComposeSince(vId: number, since: Date): Promise<number | null> {
+  const rows = await query<{ comp_id: number }>(
+    `SELECT cp.comp_id
+       FROM t_compose cp
+       JOIN t_video v ON v.v_id = cp.v_id
+      WHERE ${SBS_ONLY} AND cp.v_id = ? AND cp.reg_datetime >= ?
+      ORDER BY cp.comp_id DESC
+      LIMIT 1`,
+    [vId, since],
+  );
+  return rows[0] ? Number(rows[0].comp_id) : null;
+}
+
 /** 대시보드 요약 지표. */
 export async function getSummary(): Promise<{ videos: number; composes: number; rendered: number }> {
   const [row] = await query<{ videos: number; composes: number; rendered: number }>(
