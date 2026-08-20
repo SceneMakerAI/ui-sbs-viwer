@@ -290,15 +290,26 @@ export default function ClipPlayer({
 
           {!renderUrl && compose.status === "ok" && clips.length > 0 && (
             <div className="shrink-0 rounded-lg border border-line p-4">
-              <p className="mb-3 text-xs text-text-secondary">
-                아직 하이라이트 영상이 없습니다. 하나로 이어붙여 만들면 내려받을 수 있습니다.
-              </p>
-              <RenderOptionDialog
-                compId={compose.compId}
-                clipCount={clips.length}
-                defaultBumper={compose.bumper}
-                bumperAvailable={bumperAvailable}
-              />
+              {/* 이미 만드는 중이면 버튼을 내린다 — 중복 요청은 GPU 를 두 번 잡을 뿐이다. */}
+              {compose.renderStatus === 1 ? (
+                <p className="text-xs text-text-secondary">
+                  하이라이트 영상을 만들고 있습니다. 완성되면 이 화면에서 볼 수 있습니다.
+                </p>
+              ) : (
+                <>
+                  <p className="mb-3 text-xs text-text-secondary">
+                    {compose.renderStatus === -1
+                      ? "하이라이트 영상을 만들지 못했습니다. 다시 시도할 수 있습니다."
+                      : "아직 하이라이트 영상이 없습니다. 하나로 이어붙여 만들면 내려받을 수 있습니다."}
+                  </p>
+                  <RenderOptionDialog
+                    compId={compose.compId}
+                    clipCount={clips.length}
+                    defaultBumper={compose.bumper}
+                    bumperAvailable={bumperAvailable}
+                  />
+                </>
+              )}
             </div>
           )}
         </div>

@@ -50,6 +50,12 @@ export interface Compose {
   bumper: boolean;
   /** 렌더 완료 시각(ISO). null 이면 아직 렌더본이 없다 → 렌더 버튼 노출. */
   renderedAt: string | null;
+  /**
+   * 렌더 상태(`t_compose.render_status`) — null=요청 없음 · 1=진행 중 · 0=성공 · -1=실패.
+   * `t_code.result` 와 같은 규약이다(1=진행중, 0=완료, -1=에러).
+   * 기록 주체는 agent-compose 다(sql/t_compose_render_status.sql).
+   */
+  renderStatus: number | null;
   regDatetime: string;
 }
 

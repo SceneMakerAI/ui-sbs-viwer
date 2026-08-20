@@ -14,7 +14,7 @@ const SBS_ONLY = "v.is_sbs = 1";
 
 const SELECT = `
   SELECT cp.comp_id, cp.v_id, cp.query, cp.budget_sec, cp.status, cp.duration,
-         cp.clip_cnt, cp.bumper_yn, cp.render_datetime, cp.reg_datetime,
+         cp.clip_cnt, cp.bumper_yn, cp.render_datetime, cp.render_status, cp.reg_datetime,
          v.name AS video_name
     FROM t_compose cp
     JOIN t_video v ON v.v_id = cp.v_id
@@ -31,6 +31,7 @@ interface Row {
   clip_cnt: number;
   bumper_yn: number;
   render_datetime: Date | null;
+  render_status: number | null;
   reg_datetime: Date;
 }
 
@@ -46,6 +47,7 @@ function toCompose(r: Row): Compose {
     clipCount: Number(r.clip_cnt),
     bumper: r.bumper_yn === 1,
     renderedAt: r.render_datetime ? r.render_datetime.toISOString() : null,
+    renderStatus: r.render_status == null ? null : Number(r.render_status),
     regDatetime: r.reg_datetime.toISOString(),
   };
 }
