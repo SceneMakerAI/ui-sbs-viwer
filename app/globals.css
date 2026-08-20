@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* 디자인 토큰 — design/mockup.pen 의 변수와 1:1 일치시킨다.
+   목업을 바꾸면 여기 값도 함께 갱신한다.
+   출처: SBS Sports 실측(블랙 헤더 + 화이트 콘텐츠 + 포인트 블루). */
+@theme {
+  /* 브랜드 */
+  --color-brand-blue: #109ce8;
+  --color-brand-blue-hover: #0d84c4;
+  --color-brand-blue-soft: #e7f5fd;
+
+  /* 다크 영역(헤더·플레이어) */
+  --color-ink: #000000;
+  --color-ink-soft: #1a1a1a;
+  --color-on-dark: #ffffff;
+  --color-on-dark-dim: #9aa3a9;
+
+  /* 라이트 영역(콘텐츠) */
+  --color-surface: #ffffff;
+  --color-surface-alt: #f4f6f8;
+  --color-line: #e5eaeb;
+
+  --color-text-primary: #111417;
+  --color-text-secondary: #6b7379;
+  --color-text-muted: #969696;
+
+  /* 상태 */
+  --color-success: #0e9f6e;
+  --color-success-soft: #e3f6ee;
+  --color-warn: #b54708;
+  --color-warn-soft: #fef0e6;
+  --color-danger: #d94141;
+  --color-danger-soft: #fdecec;
+
+  --radius-sm: 5px;
+  --radius: 8px;
+  --radius-lg: 10px;
+
+  --font-body: var(--font-noto-sans-kr), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+}

@@ -1,0 +1,24 @@
+[Unit]
+Description=ui-sbs-viwer (SceneMaker SBS public viewer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ui
+Group=ui
+WorkingDirectory=/usr/service/source/scenemaker/ui/ui-sbs-viwer
+EnvironmentFile=/usr/service/source/scenemaker/ui/ui-sbs-viwer/.env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+# 편성·렌더 동시 1건 제한이 프로세스 내 잠금이라 반드시 단일 프로세스로 둔다
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/usr/service/source/scenemaker/ui/ui-sbs-viwer /usr/service/logs/scenemaker/ui-sbs
+
+[Install]
+WantedBy=multi-user.target
