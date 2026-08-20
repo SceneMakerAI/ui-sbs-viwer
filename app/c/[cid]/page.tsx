@@ -4,6 +4,7 @@ import { ChevronLeft } from "lucide-react";
 import ClipPlayer from "@/components/ClipPlayer";
 import { formatDate, formatDuration } from "@/lib/format";
 import { getCompose, getTeams, listClips } from "@/lib/server/composes";
+import { composePhase } from "@/lib/domain/compose-state";
 import { getVideoDir } from "@/lib/server/videos";
 import { exists, presignGet, renderKey, sourceKey } from "@/lib/server/s3";
 
@@ -22,10 +23,12 @@ export default async function ComposeResultPage({ params }: { params: Promise<{ 
     getTeams(compose.vId),
   ]);
 
-  // 렌더본 존재 확인 — DB 의 render_datetime 이 정본이지만, agent-compose 쪽 기록 구현이
-  // 들어오기 전까지는 스탬프가 비어 있을 수 있어 S3 로도 확인한다(REQUEST_agent-compose.md).
+  const phase = composePhase(compose);
+
+  // 렌더본 존재 확인 — DB(render_status·render_datetime)가 정본이지만, agent-compose 쪽 기록
+  // 구현이 들어오기 전까지는 비어 있을 수 있어 S3 로도 확인한다(REQUEST_agent-compose.md).
   const key = renderKey(compose.vId, compose.compId);
-  const hasRender = compose.renderedAt !== null || (await exists(key));
+  const hasRender = phase === "ready" || (await exists(key));
 
   const [renderUrl, sourceUrl] = await Promise.all([
     hasRender ? presignGet(key) : Promise.resolve(null),
@@ -53,9 +56,15 @@ export default async function ComposeResultPage({ params }: { params: Promise<{ 
         </p>
       </div>
 
+      {/* 클립이 없는 이유는 셋이다 — 아직 편성 중 / 편성 실패 / 조건에 맞는 장면 없음.
+          같은 문구로 뭉뚱그리면 기다리면 될 일을 실패로 오해한다(lib/domain/compose-state.ts). */}
       {clips.length === 0 ? (
         <p className="rounded-lg border border-line bg-surface-alt p-10 text-center text-sm text-text-secondary">
-          이 편성에는 클립이 없습니다. 질의를 바꿔 다시 편성해 보세요.
+          {phase === "composing"
+            ? "클립을 편성하고 있습니다. 잠시 후 다시 확인해 주세요."
+            : phase === "compose_failed"
+              ? "편성에 실패했습니다. 질의를 바꿔 다시 시도해 보세요."
+              : "이 편성에는 클립이 없습니다. 질의를 바꿔 다시 편성해 보세요."}
         </p>
       ) : (
         <ClipPlayer compose={compose} clips={clips} teams={teams} sourceUrl={sourceUrl} renderUrl={renderUrl} />
