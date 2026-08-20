@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 /** 메뉴 4종 — 순서 고정(PAGES.md §2-1-1). */
 const MENU = [
-  { href: "/", label: "대시보드" },
+  // { href: "/", label: "대시보드" },   // 데모 기간 임시 비활성화 (proxy.ts 에서 /videos 로 리다이렉트)
   { href: "/upload", label: "업로드" },
   { href: "/videos", label: "업로드 영상" },
   { href: "/clips", label: "편성 클립" },
