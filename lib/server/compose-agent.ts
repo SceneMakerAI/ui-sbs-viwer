@@ -73,16 +73,24 @@ export class BusyError extends Error {
 /**
  * agent-compose 그래프 노드명 → 화면 문구.
  * 내부 노드명을 그대로 노출하지 않는다(PAGES.md §2-2).
+ *
+ * 노드명은 2026-08-20 에 동사_목적어로 개편됐다(구 expand·plan·cut·bounds·verify…).
+ * 표를 못 따라가면 미매핑 노드가 sanitizeCodeText 로 새어 원문이 화면에 뜬다 —
+ * 실제로 개편 전에도 cutrank·backfill·endfix 는 이미 없는 노드였고 bounds·rank·
+ * select 는 표에 없어 그대로 노출되고 있었다. **전 노드를 빠짐없이 적는다.**
  */
 const NODE_LABEL: Record<string, string> = {
-  retrieve: "장면 자료 모으는 중",
-  plan: "장면 고르는 중",
-  feedback: "선곡 다듬는 중",
-  cutrank: "클립 구간 정하는 중",
-  route: "클립 구간 정하는 중",
-  backfill: "길이 채우는 중",
-  endfix: "끝맺음 정리하는 중",
-  verify: "편성 검수 중",
+  rephrase_query: "질의 이해하는 중",
+  retrieve_evidence: "장면 자료 모으는 중",
+  select_clips: "장면 고르는 중",
+  retry_select: "선곡 다듬는 중",
+  set_bounds: "클립 구간 정하는 중",
+  refine_bounds: "구간 다듬는 중",
+  score_match: "편성 검수 중",
+  drop_unmatched: "관련 없는 장면 빼는 중",
+  order_clips: "순서 정하는 중",
+  fill_budget: "길이 맞추는 중",
+  end_empty: "맞는 장면을 찾지 못함",
   render: "영상 만드는 중",
 };
 
