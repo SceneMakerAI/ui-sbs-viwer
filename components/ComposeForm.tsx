@@ -14,11 +14,47 @@ const RETRY_MS = 5000;
 
 type Phase = "idle" | "waiting" | "running";
 
+/** 스위치 하나. 최대 길이 옆 옵션들이 같은 모양을 쓰므로 한 곳에 둔다. */
+function Toggle({
+  checked,
+  disabled,
+  label,
+  onToggle,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onToggle}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
+        checked ? "bg-brand-blue" : "bg-line"
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 block h-5 w-5 rounded-full bg-surface transition-all ${
+          checked ? "left-[22px]" : "left-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
 export default function ComposeForm({ vId }: { vId: number }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [budgetSec, setBudgetSec] = useState<number>(DEFAULT_BUDGET_SEC);
-  // 편성이 끝나면 이어서 렌더까지 가므로(원샷) 범퍼를 여기서 받는다. 기본 On.
+  // 편성에 이어 하이라이트 영상까지 한 번에 만들지(원샷). 끄면 편성만 하고,
+  // 영상은 결과 화면에서 따로 만든다. 기본 On — 지금까지의 동작이다.
+  const [render, setRender] = useState(true);
+  // 범퍼는 영상을 만들 때만 쓰는 출력 옵션이라 위 토글에 딸린다.
   const [bumper, setBumper] = useState(true);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState<string[]>([]);
@@ -93,7 +129,7 @@ export default function ComposeForm({ vId }: { vId: number }) {
       const r = await fetch("/api/compose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vId, query: query.trim(), budgetSec, bumper }),
+        body: JSON.stringify({ vId, query: query.trim(), budgetSec, render, bumper: render && bumper }),
       });
       // 게이트웨이(nginx)가 끼어들면 본문이 HTML 이라 JSON 파싱이 터진다 —
       // 그때도 상태 코드로 상황을 구분해야 해서 파싱 실패를 삼킨다.
@@ -133,11 +169,12 @@ export default function ComposeForm({ vId }: { vId: number }) {
       setError("편성 요청 중 오류가 발생했습니다.");
       setPhase("idle");
     }
-  }, [budgetSec, bumper, poll, query, vId]);
+  }, [budgetSec, bumper, poll, query, render, vId]);
 
   submitRef.current = submit;
 
   const disabled = phase !== "idle" || query.trim().length < 2;
+  const budgetLabel = BUDGET_OPTIONS.find((o) => o.sec === budgetSec)?.label ?? "";
 
   return (
     <div className="rounded-lg border border-line bg-surface p-5 sm:p-6">
@@ -202,29 +239,47 @@ export default function ComposeForm({ vId }: { vId: number }) {
                 </button>
               ))}
             </div>
+            {/* 고른 길이가 곧 만드는 데 걸리는 시간이라, 고를 때마다 그 자리에서 알려준다. */}
+            <p className="mt-1.5 text-xs text-text-muted">만드는 데 약 {budgetLabel} 정도 걸립니다.</p>
           </div>
 
-          <div>
-            <p className="text-xs text-text-muted">이닝 사이 범퍼</p>
-            <div className="mt-1.5 flex items-center gap-2 py-1.5">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={bumper}
-                aria-label="이닝 사이 범퍼 넣기"
-                disabled={phase !== "idle"}
-                onClick={() => setBumper((v) => !v)}
-                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
-                  bumper ? "bg-brand-blue" : "bg-line"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 block h-5 w-5 rounded-full bg-surface transition-all ${
-                    bumper ? "left-[22px]" : "left-0.5"
-                  }`}
+          {/* 왼쪽의 "최대 길이"(편성 조건)와 오른쪽 옵션(영상 출력)은 성격이 다르다 — 세로선으로 가른다. */}
+          {/* 두 스위치는 위쪽(라벨)을 맞춰 나란히 서게 한다 — 아래 안내문 길이가 서로 달라서
+              items-end 로 두면 스위치 높이가 어긋난다. */}
+          <div className="flex flex-wrap items-start gap-x-8 gap-y-4 sm:border-l sm:border-line sm:pl-8">
+            <div>
+              <p className="text-xs text-text-muted">하이라이트 영상 바로 생성</p>
+              <div className="mt-1.5 flex items-center gap-2 py-1.5">
+                <Toggle
+                  checked={render}
+                  disabled={phase !== "idle"}
+                  label="하이라이트 영상 바로 생성"
+                  onToggle={() => setRender((v) => !v)}
                 />
-              </button>
-              <span className="text-sm text-text-secondary">{bumper ? "넣기" : "안 넣기"}</span>
+                <span className="text-sm text-text-secondary">{render ? "생성" : "편성만"}</span>
+              </div>
+              {/* 안내문이 길어져도 옆 칸을 밀어내지 않게 폭을 묶고 접히게 둔다. */}
+              <p className="mt-1 max-w-[13rem] text-xs text-text-muted">
+                {render
+                  ? "영상 생성에 추가 시간이 필요합니다."
+                  : "영상은 결과 화면에서 만들 수 있습니다."}
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-text-muted">이닝 사이 범퍼</p>
+              <div className="mt-1.5 flex items-center gap-2 py-1.5">
+                <Toggle
+                  checked={render && bumper}
+                  // 영상을 안 만들면 범퍼가 들어갈 자리도 없다.
+                  disabled={phase !== "idle" || !render}
+                  label="이닝 사이 범퍼 넣기"
+                  onToggle={() => setBumper((v) => !v)}
+                />
+                <span className={`text-sm ${render ? "text-text-secondary" : "text-text-muted"}`}>
+                  {render ? (bumper ? "넣기" : "안 넣기") : "해당 없음"}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -233,7 +288,7 @@ export default function ComposeForm({ vId }: { vId: number }) {
           type="button"
           disabled={disabled}
           onClick={submit}
-          className="inline-flex items-center justify-center gap-2 rounded bg-brand-blue px-6 py-3 text-sm font-bold text-on-dark transition-colors hover:bg-brand-blue-hover disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded bg-brand-blue px-6 py-3 text-sm font-bold text-on-dark transition-colors hover:bg-brand-blue-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {phase === "idle" ? (
             <>

@@ -12,6 +12,8 @@ const Body = z.object({
   vId: z.number().int().positive(),
   query: z.string().trim().min(2).max(200),
   budgetSec: z.union([z.literal(300), z.literal(600), z.literal(900), z.literal(1200)]),
+  /** 편성에 이어 하이라이트 영상까지 한 번에 만들지(원샷). 끄면 편성만 한다. */
+  render: z.boolean(),
   bumper: z.boolean(),
 });
 
@@ -25,7 +27,7 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
-  const { vId, query, budgetSec, bumper } = parsed.data;
+  const { vId, query, budgetSec, render, bumper } = parsed.data;
 
   // 노출 대상 영상인지 서버에서 재검증한다 — v_id 는 주소창으로 바꿔 넣을 수 있다.
   const video = await getVideo(vId);
@@ -39,7 +41,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { jobId } = await startCompose({ vId, query, budgetSec, bumper });
+    const { jobId } = await startCompose({ vId, query, budgetSec, render, bumper });
     return NextResponse.json({ jobId }, { status: 202 });
   } catch (e) {
     if (e instanceof BusyError) {

@@ -224,7 +224,9 @@ export interface StartComposeParams {
   query: string;
   /** 상한 초. 사용자가 고른 "최대 N분". */
   budgetSec: number;
-  /** 이닝 사이 범퍼 — 이어지는 렌더에 쓰인다. */
+  /** 편성에 이어 렌더까지 한 잡에서 갈지(원샷). false 면 편성만 한다. */
+  render: boolean;
+  /** 이닝 사이 범퍼 — 이어지는 렌더에 쓰인다. `render=false` 면 의미 없다. */
   bumper: boolean;
 }
 
@@ -247,14 +249,17 @@ export async function startCompose(p: StartComposeParams): Promise<{ jobId: stri
           budget: p.budgetSec,
           // 원샷 — 편성이 ok 면 이어서 렌더까지 간다. 잡 폴링으로 진행이 보이므로
           // 브라우저가 동기 응답을 기다리지 않는다(렌더 단독 호출의 약점을 피한다).
-          render: true,
+          // 화면에서 끄면 편성만 하고, 영상은 결과 화면에서 따로 만든다.
+          render: p.render,
           bumper: p.bumper,
         }),
       },
       30_000,
     );
     lock = { jobId: res.job_id, vId: p.vId, since: Date.now() };
-    log.info("편성 접수", { vId: p.vId, jobId: res.job_id, budgetSec: p.budgetSec, bumper: p.bumper });
+    log.info("편성 접수", {
+      vId: p.vId, jobId: res.job_id, budgetSec: p.budgetSec, render: p.render, bumper: p.bumper,
+    });
     // 화면이 폴링해 주지 않아도 서버가 끝을 확인하고 잠금을 푼다.
     watch(res.job_id, p.vId, lock.since);
     return { jobId: res.job_id };
