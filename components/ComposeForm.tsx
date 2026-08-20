@@ -220,7 +220,7 @@ export default function ComposeForm({ vId }: { vId: number }) {
         <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
           <div>
             {/* budget 은 목표가 아니라 상한이라 "최대"로 적는다. */}
-            <p className="text-xs text-text-muted">최대 길이</p>
+            <p className="text-xs text-text-muted">최대 길이(약 30% 내외로 차이가 있을수 있습니다.)</p>
             <div className="mt-1.5 inline-flex rounded border border-line p-1">
               {BUDGET_OPTIONS.map((o) => (
                 <button

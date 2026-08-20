@@ -45,7 +45,8 @@ export default function VideoCard({ video }: { video: Video }) {
             </>
           )}
         </div>
-        <StatusBadge code={video.statusCode} label={video.statusName || undefined} />
+        {/* 카드에서는 단계를 숨기고 업로드 중/완료로만 말한다 — 자세한 단계는 상세 화면에서. */}
+        <StatusBadge code={video.statusCode} variant="simple" />
       </div>
     </Link>
   );

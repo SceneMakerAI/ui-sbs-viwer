@@ -8,16 +8,29 @@ import { isBandComplete, isComposable, isErrorCode, isRunning } from "@/lib/doma
 export default function StatusBadge({
   code,
   label,
+  /**
+   * `simple` 은 파이프라인 단계를 숨기고 **업로드 중 / 업로드 완료** 두 가지로만 말한다.
+   * 목록 카드용이다 — "장면 발행 중", "증거 색인 중" 같은 내부 진행 단계는
+   * 훑어보는 화면에서 알 필요가 없다. 자세한 단계는 상세 화면에서 보여준다.
+   */
+  variant = "detail",
 }: {
   code: number | null;
   label?: string;
+  variant?: "detail" | "simple";
 }) {
+  const simple = variant === "simple";
   let tone = "bg-surface-alt text-text-secondary";
-  let text = label || "상태 미상";
+  let text = (simple ? "" : label) || "상태 미상";
 
   if (isErrorCode(code)) {
     tone = "bg-danger-soft text-danger";
-    text = label || "처리 실패";
+    // 실패까지 "업로드 중"으로 뭉개면 영영 기다리게 된다 — 실패는 실패로 알린다.
+    text = (simple ? "" : label) || "처리 실패";
+  } else if (simple) {
+    tone = "bg-brand-blue-soft text-brand-blue";
+    // 완료 기준은 "편성할 수 있는가" — 편성·렌더대(4000~)까지 왔으면 이미 완료다.
+    text = isComposable(code) ? "업로드 완료" : "업로드 중";
   } else if (isRunning(code)) {
     tone = "bg-brand-blue-soft text-brand-blue";
     text = label || "분석 중";
