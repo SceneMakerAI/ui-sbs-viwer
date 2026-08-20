@@ -63,10 +63,29 @@ PM2 클러스터로 띄우면 무력해진다. 배포는 systemd 단일 프로�
 **7. 길이(`budget`)는 목표가 아니라 상한이다.**
 900초 요청이 311초로 나온 실측이 있다. 화면 문구는 "최대 N분".
 
+## 배포
+
+배포 디렉토리는 **`/usr/service/source/scenemaker/ui/ui-sbs-viwer`**(sm-pub-01, 소유자 `ui`) —
+이 저장소의 clone 이다. sm-api-01 의 `/usr/service/source/scenemaker/agent/<name>` 과 같은 규칙이다.
+
+**정본은 GitHub main** — 로컬 수정은 commit+push 후 서버에서:
+
+```bash
+deploy/update.sh            # origin/main 신규 커밋 있으면 sync+빌드+재기동, 없으면 no-op
+deploy/update.sh --force    # 강제 재빌드·재기동
+```
+
+- `.env` 는 미추적이라 `reset --hard` 에도 보존된다. `.cache/thumbs`(썸네일)도 마찬가지.
+- systemd 유닛(`sbs-viewer.service`)도 `deploy/` 가 정본 — 달라지면 자동 설치된다.
+- `npm ci --include=dev` 로 설치한다. `next build` 에 tailwind·typescript 가 필요하다.
+- 빌드 실패 시 재기동하지 않는다 — 구 버전이 계속 서비스한다.
+- 접속은 SSM Session Manager(22번 미개방). 서버는 read-only deploy key 로 fetch 만 한다.
+
 ## 관련 문서 (로컬 전용, git 미추적)
 
 - `PAGES.md` — 페이지·기능 명세, 결정 사항의 정본
 - `RESEARCH.md` — 사전 조사(DB·API·인프라 실측)
 - `DEPLOY_GUIDE.md` — sm-pub-01 구축 가이드
+- `INFRA_BUILD.md` — sm-pub-01 실제 구축 결과(인프라 좌표)
 - `REQUEST_agent-compose.md` — agent-compose 수정 요청서
 - `design/mockup.pen` — 디자인 목업(토큰은 `app/globals.css` 와 1:1)
