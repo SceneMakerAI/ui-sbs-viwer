@@ -135,23 +135,62 @@ export async function listClips(compId: number): Promise<Clip[]> {
 }
 
 /**
+ * 팀명 판독에 요구하는 최소 프레임 수 — agent-compose `repos._TEAM_MIN_FRAMES` 와 같은 값.
+ * 이보다 적으면 지어내지 않고 null 을 돌린다(화면은 숫자만 쓴다).
+ */
+const TEAM_MIN_FRAMES = 30;
+
+/** "KT 5" → "KT". 뒤에 붙은 점수 한 토큰만 떼어낸다(팀명에 공백이 있어도 안전). */
+function stripScore(s: string): string {
+  const t = s.trim();
+  const i = t.lastIndexOf(" ");
+  return (i < 0 ? t : t.slice(0, i)).trim();
+}
+
+/**
  * 대결 팀명(원정, 홈).
  *
  * `t_compose_clip.score_*` 는 "2-0" 처럼 숫자만 있어서 어느 팀 점수인지 알 수 없다.
- * 팀명은 `t_scene_baseball.score` 가 **"{원정} {원정점}-{홈점} {홈}"** 형식으로 들고 있다
- * (agent-compose 도 같은 방식으로 파싱한다). 형식이 다르면 null 을 돌려 화면이 숫자만 쓰게 한다.
+ *
+ * ⚠️ 출처가 바뀌었다(2026-08-23 상류 개편) — 예전엔 `t_scene_baseball.score` 가
+ * "{원정} {원정점}-{홈점} {홈}" 을 들고 있었으나 **그 컬럼이 사라졌다**(전이 원장 폐기,
+ * vision3 migration_20260823i). 지금 팀명의 유일한 출처는 화면 정보 자막
+ * `t_frame_baseball_board_detail(kind='TEAM')` 이고, agent-compose `repos.fetch_teams` 와
+ * **같은 방식**으로 읽는다:
+ *   · 자막 원문은 "KT 5: NC 1" 로 **원정이 먼저**다. 점수는 프레임마다 바뀌므로 숫자를
+ *     걷어낸 뒤 팀 쌍의 최빈값을 고른다 — 중계 자막엔 다른 경기 스코어가 섞여 흐른다
+ *     (v201 실측: 삼성:롯데 3,619 vs KIA:NC 103).
+ *   · 원문 그대로 최빈값을 뽑으면 "팀 쌍"이 아니라 "스코어 줄"을 세게 되므로 안 된다.
+ *     SQL 은 원문 단위로만 압축하고(수천 행 → 수백 행), 쌍 집계는 여기서 한다.
  */
 export async function getTeams(vId: number): Promise<{ away: string; home: string } | null> {
-  const rows = await query<{ score: string | null }>(
-    `SELECT sb.score
-       FROM t_scene_baseball sb
-       JOIN t_video v ON v.v_id = sb.v_id
-      WHERE ${SBS_ONLY} AND sb.v_id = ? AND sb.score IS NOT NULL
-      LIMIT 1`,
+  const rows = await query<{ txt: string; cnt: number }>(
+    `SELECT d.txt, COUNT(*) AS cnt
+       FROM t_frame_baseball_board_detail d
+       JOIN t_video v ON v.v_id = d.v_id
+      WHERE ${SBS_ONLY} AND d.v_id = ? AND d.kind = 'TEAM' AND d.txt <> ''
+      GROUP BY d.txt`,
     [vId],
   );
-  const m = rows[0]?.score?.match(/^(\S+)\s+\d+-\d+\s+(\S+)$/);
-  return m ? { away: m[1], home: m[2] } : null;
+
+  const pairs = new Map<string, { away: string; home: string; n: number }>();
+  for (const r of rows) {
+    const i = r.txt.indexOf(":");
+    if (i < 0) continue;
+    const away = stripScore(r.txt.slice(0, i));
+    const home = stripScore(r.txt.slice(i + 1));
+    if (!away || !home) continue;
+    const key = `${away}|${home}`;
+    const cur = pairs.get(key) ?? { away, home, n: 0 };
+    cur.n += Number(r.cnt);
+    pairs.set(key, cur);
+  }
+
+  let best: { away: string; home: string; n: number } | null = null;
+  for (const p of pairs.values()) if (!best || p.n > best.n) best = p;
+
+  // 판독이 모자라면 지어내지 않는다 — 틀린 팀명은 숫자만 있는 것보다 나쁘다.
+  return best && best.n >= TEAM_MIN_FRAMES ? { away: best.away, home: best.home } : null;
 }
 
 /**

@@ -41,6 +41,10 @@ export interface Compose {
   /** 영상 제목 — 목록에서 맥락 표시용. */
   videoName?: string;
   query: string;
+  /**
+   * 요청한 상한 초(`t_compose.budget_sec`). 현재 화면에 표시하지는 않는다.
+   * 2026-08-24 하루 사이 폐기→부활한 값이라 0 인 행(폐기 기간의 편성)이 섞여 있다.
+   */
   budgetSec: number;
   status: string;
   /** 총 길이(초). */
@@ -66,7 +70,7 @@ export interface Clip {
   start: number;
   end: number;
   labels: string | null;
-  /** 이닝 표기(예: "5_top"). 화면에서는 `formatInning` 을 거쳐 쓴다. */
+  /** 이닝 표기(예: "6회초"). 세대마다 표기가 달라 화면에서는 `formatInning` 을 거쳐 쓴다. */
   inning: string | null;
   scoreBefore: string | null;
   scoreAfter: string | null;

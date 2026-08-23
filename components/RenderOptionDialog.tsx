@@ -40,8 +40,9 @@ export default function RenderOptionDialog({
       });
       const j = await r.json().catch(() => ({}));
 
-      if (r.status === 409 && j.code === "ALREADY_RENDERED") {
-        // 다른 창에서 먼저 만든 경우다 — 사용자 잘못이 아니므로 그냥 새로고침해 보여준다.
+      if (r.status === 409 && (j.code === "ALREADY_RENDERED" || j.code === "RENDER_IN_PROGRESS")) {
+        // 다른 창에서 먼저 시작·완료한 경우다 — 사용자 잘못이 아니므로 그냥 새로고침해
+        // 현재 상태(만드는 중 / 준비됨)를 보여준다.
         setOpen(false);
         router.refresh();
         return;
@@ -50,8 +51,9 @@ export default function RenderOptionDialog({
         setError(j.error ?? "영상을 만들지 못했습니다.");
         return;
       }
-      // 렌더 성공. render_datetime 스탬프는 agent-compose 구현이 들어와야 남으므로
-      // 지금은 새로고침 후 S3 존재 확인으로 화면이 바뀐다(REQUEST_agent-compose.md).
+      // ⚠️ 접수됐을 뿐 아직 만들어지지 않았다 — agent-compose 는 202 로 받고 완료를
+      // 백그라운드에서 확인해 render_status·render_datetime 에 기록한다(2026-08-24).
+      // 새로고침하면 render_status=1 이라 화면이 "만들고 있습니다"로 바뀐다.
       setOpen(false);
       router.refresh();
     } catch {
@@ -86,7 +88,8 @@ export default function RenderOptionDialog({
               하이라이트 영상 만들기
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-text-secondary">
-              편성한 {clipCount}개 클립을 하나의 하이라이트 영상으로 이어붙입니다. 완성까지 몇 분 정도 걸립니다.
+              편성한 {clipCount}개 클립을 하나의 하이라이트 영상으로 이어붙입니다. 완성까지 몇 분 정도
+              걸리며, 만드는 동안 이 화면을 닫아도 됩니다.
             </p>
 
             <div className="mt-6 flex items-center gap-3 rounded bg-surface-alt p-4">
@@ -141,7 +144,7 @@ export default function RenderOptionDialog({
                 {running ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                    만드는 중
+                    요청하는 중
                   </>
                 ) : (
                   <>

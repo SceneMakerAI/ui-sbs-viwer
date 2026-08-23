@@ -13,6 +13,9 @@ GRANT SELECT ON sm_db.t_compose_clip   TO 'sm_viewer'@'192.168.0.%';
 GRANT SELECT ON sm_db.t_code           TO 'sm_viewer'@'192.168.0.%';
 GRANT SELECT ON sm_db.t_category       TO 'sm_viewer'@'192.168.0.%';
 GRANT SELECT ON sm_db.t_scene_baseball TO 'sm_viewer'@'192.168.0.%';
+-- 2026-08-24 추가 — 팀명 출처가 여기로 옮겨왔다(아래 용도 표 참조). 이 GRANT 가 없으면
+-- 편성 상세(/c/{comp_id})가 1142 Access denied 로 500 이 된다.
+GRANT SELECT ON sm_db.t_frame_baseball_board_detail TO 'sm_viewer'@'192.168.0.%';
 
 FLUSH PRIVILEGES;
 
@@ -24,7 +27,11 @@ SHOW GRANTS FOR 'sm_viewer'@'192.168.0.%';
 --  t_compose_clip   클립 구간·이닝·스코어
 --  t_code           상태코드 → 한국어 표기 (조인)
 --  t_category       카테고리명 (조인)
---  t_scene_baseball 클립 카드의 팀명 파싱 (score = "KT 0-0 NC")
+--  t_scene_baseball 장면 메타 (현재 뷰어 직접 조회는 없음 — 향후 장면 표기용으로 유지)
+--  t_frame_baseball_board_detail
+--                   클립 카드의 팀명 판독 (kind='TEAM', txt = "KT 5: NC 1" 최빈 쌍)
+--                   ⚠️ 예전 출처였던 t_scene_baseball.score 는 **컬럼이 삭제**됐다
+--                      (vision3 migration_20260823i — 전이 원장 폐기).
 --
 -- 쓰기 권한은 주지 않는다. 렌더 결과 기록은 agent-compose 담당(PAGES.md §10).
 -- 로그인 기능을 붙일 때 t_viewer_user 에 SELECT, UPDATE 를 추가한다.

@@ -7,7 +7,12 @@ import { createLogger } from "@/lib/server/log";
 
 const log = createLogger("api/compose");
 
-/** 길이는 화면의 5/10/15/20분(lib/domain/budget.ts)과 1:1. 그 밖의 값은 받지 않는다. */
+/**
+ * 길이는 화면의 5/10/15/20분(lib/domain/budget.ts)과 1:1. 그 밖의 값은 받지 않는다.
+ *
+ * ⚠️ 이 인자는 2026-08-24 하루 사이에 **폐기됐다가 되살아났다**(agent-compose 94b58dc → 0d95b9f).
+ * 지금은 `budget_sec` 이라는 이름의 **덜어내기 전용 상한**이다 — 자세한 건 budget.ts.
+ */
 const Body = z.object({
   vId: z.number().int().positive(),
   query: z.string().trim().min(2).max(200),

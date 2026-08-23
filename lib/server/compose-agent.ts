@@ -40,9 +40,15 @@ let lock: Lock | null = null;
 /**
  * 잠금 자동 만료(ms) — 잡이 어떤 이유로든 해제를 못 하고 죽었을 때의 안전장치.
  * 원샷(편성→렌더)은 두 단계를 연달아 도므로 **합**에 여유를 더한다.
+ *
+ * ⚠️ 기본값을 10분 → 25분으로 올렸다(2026-08-24). agent-compose 가 `select_clips` 의
+ * thinking 가드를 480 → **900초**로, 전송 타임아웃을 600 → 1200초로 올렸다(0d95b9f).
+ * 거기에 재선곡(retry_select)까지 돌면 편성만으로 구 TTL(22분)을 넘길 수 있고, 그러면
+ * **아직 도는 잡의 잠금이 풀려** 다음 요청이 GPU 를 겹쳐 잡는다.
+ * 이 값은 서버측 감시(`watch`)가 실패했을 때의 마지막 빗장일 뿐이라 넉넉해도 손해가 적다.
  */
 const LOCK_TTL_MS =
-  Number(process.env.COMPOSE_TIMEOUT_MS ?? 600_000) +
+  Number(process.env.COMPOSE_TIMEOUT_MS ?? 1_500_000) +
   Number(process.env.RENDER_TIMEOUT_MS ?? 660_000) +
   60_000;
 
@@ -55,10 +61,50 @@ function activeLock(): Lock | null {
   return lock;
 }
 
-/** 지금 편성이 진행 중인가 — `GET /api/compose/busy` 용. */
-export function busyState(): { busy: boolean; since: string | null } {
+/**
+ * 마지막 잡의 진행/결말 — **화면을 떠나도 진행이 보이게** 하는 근거다.
+ *
+ * 편성 폼의 진행 표시는 브라우저 메모리에만 있어서 페이지를 벗어나면 사라졌다(작업 자체는
+ * 서버에서 계속 돌았다). 서버가 어차피 5초마다 잡을 감시하고 있으니, 그 결과를 여기 남겨
+ * 어느 페이지에서든 같은 상태를 읽게 한다.
+ */
+export interface JobSnapshot {
+  jobId: string;
+  vId: number;
+  status: JobStatus["status"];
+  /** 진행 문구(화면 표기). 마지막 항목이 현재 단계다. */
+  progress: string[];
+  compId?: number;
+  error?: string;
+  /** 갱신 시각(ISO). */
+  at: string;
+}
+
+let snapshot: JobSnapshot | null = null;
+/** jobId → v_id. 폴링 응답에는 v_id 가 없어서 접수 때 기억해 둔다. */
+const jobVideo = new Map<string, number>();
+
+/** 스냅샷 갱신 — 폴링(브라우저·서버 감시 공용)이 결과를 볼 때마다 부른다. */
+function setSnapshot(jobId: string, st: JobStatus): void {
+  snapshot = {
+    jobId,
+    vId: jobVideo.get(jobId) ?? snapshot?.vId ?? 0,
+    status: st.status,
+    progress: st.progress,
+    compId: st.compId,
+    error: st.error,
+    at: new Date().toISOString(),
+  };
+}
+
+/** 지금 편성이 진행 중인가 + 마지막 잡의 상태 — `GET /api/compose` 용. */
+export function busyState(): { busy: boolean; since: string | null; job: JobSnapshot | null } {
   const l = activeLock();
-  return { busy: l !== null, since: l ? new Date(l.since).toISOString() : null };
+  return {
+    busy: l !== null,
+    since: l ? new Date(l.since).toISOString() : null,
+    job: snapshot,
+  };
 }
 
 export function releaseLock(jobId: string): void {
@@ -73,7 +119,7 @@ export function releaseLock(jobId: string): void {
  *
  * 이 감시가 없으면 잠금 해제가 **브라우저 폴링에만** 달린다. 탭을 닫거나 새로고침하거나
  * 모바일에서 백그라운드로 밀려 타이머가 멈추면, 잡이 1분 만에 끝나도 다음 사람은
- * TTL(22분)이 지나기 전까지 "대기 중"만 본다 — 2026-08-20 실제로 겪은 상황이다.
+ * TTL(현재 약 36분)이 지나기 전까지 "대기 중"만 본다 — 2026-08-20 실제로 겪은 상황이다.
  */
 const WATCH_MS = 5_000;
 
@@ -119,12 +165,12 @@ function watch(jobId: string, vId: number, since: number): void {
       // (이 시점엔 agent 가 잡을 모르니 "아직 진행 중"일 수는 없다).
       if (e instanceof AgentError && e.status === 404) {
         const compId = await findComposeSince(vId, new Date(since)).catch(() => null);
-        remember(
-          jobId,
+        const verdict: JobStatus =
           compId != null
             ? { status: "ok", progress: [], compId }
-            : { status: "error", progress: [], error: "편성이 중단됐습니다. 다시 시도해 주세요." },
-        );
+            : { status: "error", progress: [], error: "편성이 중단됐습니다. 다시 시도해 주세요." };
+        remember(jobId, verdict);
+        setSnapshot(jobId, verdict);
         log.warn("잡 조회 불가 — DB 로 결말 판정", { jobId, vId, compId });
         releaseLock(jobId); // stopWatch 포함
         return;
@@ -153,22 +199,25 @@ export class BusyError extends Error {
  * agent-compose 그래프 노드명 → 화면 문구.
  * 내부 노드명을 그대로 노출하지 않는다(PAGES.md §2-2).
  *
- * 노드명은 2026-08-20 에 동사_목적어로 개편됐다(구 expand·plan·cut·bounds·verify…).
- * 표를 못 따라가면 미매핑 노드가 sanitizeCodeText 로 새어 원문이 화면에 뜬다 —
- * 실제로 개편 전에도 cutrank·backfill·endfix 는 이미 없는 노드였고 bounds·rank·
- * select 는 표에 없어 그대로 노출되고 있었다. **전 노드를 빠짐없이 적는다.**
+ * ⚠️ **정본은 agent-compose `src/flow/graph.py` 의 `add_node()` 목록**이다. 표를 못
+ * 따라가면 미매핑 노드가 sanitizeCodeText 로 새어 원문이 화면에 뜬다 — 실제로 그랬다.
+ * 노드가 바뀔 때마다 이 표를 같이 고친다(agent-compose CLAUDE.md 에도 같은 경고가 있다).
+ *
+ * 2026-08-24 갱신 — 플로우가 "선곡 + 경계" 둘로 좁혀지면서 채점(score_match)·0점 제외
+ * (drop_unmatched)·순서(order_clips)·예산 채우기(fill_budget)가 **폐기**됐고, 경계 보정이
+ * `set_bounds`/`refine_bounds` 하나에서 끝(refine_end_bound)·시작(refine_start_bound)
+ * 둘로 갈렸다. `finish` 는 신규 마감 노드다 — 예산 절단이 같은 날 되살아났지만 별도
+ * 노드가 아니라 `finish` 안의 순수 계산이라 진행 표기는 늘어나지 않는다.
+ * `render` 는 그래프 노드가 아니라 원샷(render=true) 때 API 가 progress 에 덧붙이는 값이다.
  */
 const NODE_LABEL: Record<string, string> = {
   rephrase_query: "질의 이해하는 중",
   retrieve_evidence: "장면 자료 모으는 중",
   select_clips: "장면 고르는 중",
   retry_select: "선곡 다듬는 중",
-  set_bounds: "클립 구간 정하는 중",
-  refine_bounds: "구간 다듬는 중",
-  score_match: "편성 검수 중",
-  drop_unmatched: "관련 없는 장면 빼는 중",
-  order_clips: "순서 정하는 중",
-  fill_budget: "길이 맞추는 중",
+  refine_end_bound: "클립 끝 정하는 중",
+  refine_start_bound: "클립 시작 정하는 중",
+  finish: "편성 마무리 중",
   end_empty: "맞는 장면을 찾지 못함",
   render: "영상 만드는 중",
 };
@@ -222,7 +271,7 @@ export class AgentError extends Error {
 export interface StartComposeParams {
   vId: number;
   query: string;
-  /** 상한 초. 사용자가 고른 "최대 N분". */
+  /** 상한 초. 사용자가 고른 "최대 N분" — agent 는 이 값을 넘는 만큼 중요도 낮은 클립부터 버린다. */
   budgetSec: number;
   /** 편성에 이어 렌더까지 한 잡에서 갈지(원샷). false 면 편성만 한다. */
   render: boolean;
@@ -246,7 +295,10 @@ export async function startCompose(p: StartComposeParams): Promise<{ jobId: stri
         body: JSON.stringify({
           v_id: p.vId,
           query: p.query,
-          budget: p.budgetSec,
+          budget_sec: p.budgetSec,
+          // ⚠️ 필드명은 `budget` 이 아니라 **`budget_sec`** 이다 — 2026-08-24 에 인자가
+          // 되살아나면서 이름도 바뀌었다(agent 0d95b9f). 구 이름으로 보내면 pydantic 이
+          // 조용히 버려서 절단이 통째로 안 걸린다(에러도 안 난다).
           // 원샷 — 편성이 ok 면 이어서 렌더까지 간다. 잡 폴링으로 진행이 보이므로
           // 브라우저가 동기 응답을 기다리지 않는다(렌더 단독 호출의 약점을 피한다).
           // 화면에서 끄면 편성만 하고, 영상은 결과 화면에서 따로 만든다.
@@ -261,6 +313,8 @@ export async function startCompose(p: StartComposeParams): Promise<{ jobId: stri
       vId: p.vId, jobId: res.job_id, budgetSec: p.budgetSec, render: p.render, bumper: p.bumper,
     });
     // 화면이 폴링해 주지 않아도 서버가 끝을 확인하고 잠금을 푼다.
+    jobVideo.set(res.job_id, p.vId);
+    setSnapshot(res.job_id, { status: "running", progress: [] });
     watch(res.job_id, p.vId, lock.since);
     return { jobId: res.job_id };
   } catch (e) {
@@ -294,6 +348,8 @@ export async function pollJob(jobId: string): Promise<JobStatus> {
     error: job.error,
   };
 
+  setSnapshot(jobId, result);
+
   if (status !== "running") {
     remember(jobId, result);
     releaseLock(jobId);
@@ -303,17 +359,27 @@ export async function pollJob(jobId: string): Promise<JobStatus> {
   return result;
 }
 
+/** 렌더 **접수** 요청의 타임아웃(ms) — 완주가 아니라 202 를 받는 데 걸리는 시간이다. */
+const RENDER_ACCEPT_TIMEOUT_MS = 60_000;
+
 /**
- * 렌더 요청(동기). worker-render 가 떠 있을 때만 성공한다.
+ * 렌더 **접수**(비동기). 완료를 기다리지 않는다.
  *
- * ⚠️ `render_datetime` 기록과 중복 차단(409 COMPOSE_ALREADY_RENDERED)은
- * **agent-compose 쪽 구현이 들어와야** 동작한다(REQUEST_agent-compose.md).
- * 그 전까지는 성공해도 DB 에 스탬프가 남지 않으므로, 화면은 응답 성공을 낙관적으로 반영한다.
- * UI 서버가 대신 UPDATE 하지 않는다 — DB 계정을 SELECT 전용으로 유지하는 게 결정 사항이다.
+ * ⚠️ 2026-08-24 계약 변경 — 단독 `POST /api/v1/render` 는 이제 워커에 `sync_yn=false` 로
+ * 접수만 하고 **202 {status:"accepted"}** 를 즉시 돌려준다. 완료는 agent-compose 의
+ * 백그라운드 폴러가 확인해 `t_compose.render_datetime`·`render_status` 에 기록한다
+ * (원샷 `render=true` 경로는 여전히 동기라 잡 폴링으로 끝까지 보인다 — LOCK_TTL_MS 가
+ * 두 단계의 합인 이유).
+ *   → 호출부는 이 함수가 돌아왔다고 "영상이 만들어졌다"고 말하면 안 된다. 화면은
+ *     `render_status`(1=만드는 중)로 상태를 읽는다.
+ *
+ * 중복 차단·완료 스탬프는 agent-compose 가 소유한다(409 COMPOSE_ALREADY_RENDERED /
+ * RENDER_IN_PROGRESS). UI 서버가 대신 UPDATE 하지 않는다 — DB 계정을 SELECT 전용으로
+ * 유지하는 게 결정 사항이다.
  */
 export async function requestRender(compId: number, bumper: boolean): Promise<unknown> {
-  // 렌더도 GPU 를 쓰고 최대 11분을 잡아먹는다 — 편성과 같은 잠금을 공유해 전역 1건으로 묶는다.
-  // (§5 의 취지가 GPU 보호인데, 정작 더 무거운 쪽이 렌더다.)
+  // 접수는 짧지만 GPU 를 새로 잡는 행위라, 편성 접수와 겹치지 않게 같은 잠금을 통과시킨다.
+  // (렌더 자체의 중복은 agent 쪽 render_status=1 이 막으므로 여기서 오래 붙들지 않는다.)
   if (activeLock()) throw new BusyError();
 
   const jobId = `render-${compId}-${Date.now()}`;
@@ -322,7 +388,7 @@ export async function requestRender(compId: number, bumper: boolean): Promise<un
     return await request(
       "/render",
       { method: "POST", body: JSON.stringify({ comp_id: compId, bumper }) },
-      Number(process.env.RENDER_TIMEOUT_MS ?? 660_000),
+      RENDER_ACCEPT_TIMEOUT_MS,
     );
   } finally {
     releaseLock(jobId);

@@ -174,7 +174,6 @@ export default function ComposeForm({ vId }: { vId: number }) {
   submitRef.current = submit;
 
   const disabled = phase !== "idle" || query.trim().length < 2;
-  const budgetLabel = BUDGET_OPTIONS.find((o) => o.sec === budgetSec)?.label ?? "";
 
   return (
     <div className="rounded-lg border border-line bg-surface p-5 sm:p-6">
@@ -219,8 +218,9 @@ export default function ComposeForm({ vId }: { vId: number }) {
       <div className="mt-5 flex flex-col gap-4 border-t border-line pt-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
           <div>
-            {/* budget 은 목표가 아니라 상한이라 "최대"로 적는다. */}
-            <p className="text-xs text-text-muted">최대 길이(약 30% 내외로 차이가 있을수 있습니다.)</p>
+            {/* 이제 budget 은 실제로 지켜지는 상한이다 — 넘치는 만큼 중요도가 낮은 클립부터
+                버린다(덜어내기 전용, lib/domain/budget.ts). 모자라면 모자란 대로 나온다. */}
+            <p className="text-xs text-text-muted">최대 길이</p>
             <div className="mt-1.5 inline-flex rounded border border-line p-1">
               {BUDGET_OPTIONS.map((o) => (
                 <button
@@ -239,8 +239,9 @@ export default function ComposeForm({ vId }: { vId: number }) {
                 </button>
               ))}
             </div>
-            {/* 고른 길이가 곧 만드는 데 걸리는 시간이라, 고를 때마다 그 자리에서 알려준다. */}
-            <p className="mt-1.5 text-xs text-text-muted">만드는 데 약 {budgetLabel} 정도 걸립니다.</p>
+            <p className="mt-1.5 max-w-[15rem] text-xs text-text-muted">
+              넘으면 덜 중요한 장면부터 빠집니다. 짧게 나올 수도 있습니다.
+            </p>
           </div>
 
           {/* 왼쪽의 "최대 길이"(편성 조건)와 오른쪽 옵션(영상 출력)은 성격이 다르다 — 세로선으로 가른다. */}

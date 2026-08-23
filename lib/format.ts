@@ -30,14 +30,21 @@ export function formatDate(iso: string): string {
 }
 
 /**
- * 이닝 표기 정규화 — DB 는 "5_top" / "7_bot" 형태로 저장한다.
+ * 이닝 표기 정규화 — 목표는 항상 "6회초".
+ *
+ * ⚠️ DB 에 **세 세대**가 섞여 있다(상류 개편 이력):
+ *   · "5_top" / "7_bot"  옛 표기 (현재 신규 데이터에는 없다)
+ *   · "9회 초"           중간 표기 — 사이에 공백이 있다
+ *   · "9회초"            현재 표기
+ * 한 편성 안에서 표기가 갈리면 목록이 들쭉날쭉해 보이므로 여기서 하나로 모은다.
  * 규칙 밖 값은 원문을 그대로 돌려준다(임의 해석하지 않는다).
  */
 export function formatInning(inning: string | null | undefined): string | null {
   if (!inning) return null;
-  const m = inning.match(/^(\d+)_(top|bot)$/i);
-  if (!m) return inning;
-  return `${m[1]}회${m[2].toLowerCase() === "top" ? "초" : "말"}`;
+  const legacy = inning.match(/^(\d+)_(top|bot)$/i);
+  if (legacy) return `${legacy[1]}회${legacy[2].toLowerCase() === "top" ? "초" : "말"}`;
+  const ko = inning.match(/^(\d+)\s*회\s*(초|말)$/);
+  return ko ? `${ko[1]}회${ko[2]}` : inning;
 }
 
 /** "3:2" 형태의 스코어 전후를 "1:0 → 3:0" 으로. 한쪽이 없으면 있는 쪽만. */

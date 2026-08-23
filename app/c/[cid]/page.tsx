@@ -25,8 +25,9 @@ export default async function ComposeResultPage({ params }: { params: Promise<{ 
 
   const phase = composePhase(compose);
 
-  // 렌더본 존재 확인 — DB(render_status·render_datetime)가 정본이지만, agent-compose 쪽 기록
-  // 구현이 들어오기 전까지는 비어 있을 수 있어 S3 로도 확인한다(REQUEST_agent-compose.md).
+  // 렌더본 존재 확인 — DB(render_status·render_datetime)가 정본이다(agent-compose 가
+  // mark_rendered 로 기록한다 — 2026-08-24 구현 확인). 컬럼이 생기기 전에 만들어진 옛
+  // 편성과 스탬프 실패(상태코드 4960) 대비로 S3 존재 확인을 보조로 남긴다.
   const key = renderKey(compose.vId, compose.compId);
   const hasRender = phase === "ready" || (await exists(key));
 
