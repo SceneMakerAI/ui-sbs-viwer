@@ -14,13 +14,16 @@
  * 필드명도 바뀌었다 — agent 로 보낼 때는 `budget`(구) 이 아니라 **`budget_sec`** 이다.
  */
 export const BUDGET_OPTIONS = [
+  // `null` = 상한 없음 — 고른 장면을 그대로 다 담는다(agent 의 `budget_sec` 을 안 보내는 것과 같다).
+  // **기본 선택**이라 맨 앞에 둔다: 절단은 예외 상황이고, 기본은 선곡 그대로 보여주는 것.
+  { sec: null, label: "없음" },
   { sec: 300, label: "5분" },
   { sec: 600, label: "10분" },
   { sec: 900, label: "15분" },
-  { sec: 1200, label: "20분" },
 ] as const;
 
-export const DEFAULT_BUDGET_SEC = 600;
+/** 기본 선택 = "없음"(상한 미적용). 2026-08-24 에 10분 → 없음으로 바꿨다. */
+export const DEFAULT_BUDGET_SEC: number | null = null;
 
 // 값 검증은 `app/api/compose/route.ts` 의 zod literal union 이 한다 — 여기 헬퍼를 따로 두면
 // 검증 지점이 둘로 갈린다(구 `isValidBudget` 은 아무도 부르지 않아 지웠다).

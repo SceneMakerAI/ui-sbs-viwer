@@ -39,7 +39,8 @@ let lock: Lock | null = null;
 
 /**
  * 잠금 자동 만료(ms) — 잡이 어떤 이유로든 해제를 못 하고 죽었을 때의 안전장치.
- * 원샷(편성→렌더)은 두 단계를 연달아 도므로 **합**에 여유를 더한다.
+ * 편성 잡은 이제 렌더를 품지 않는다(원샷 폐지, 2026-08-24) — 그래도 렌더 접수도 같은 잠금을
+ * 통과하므로 **두 단계의 합**을 유지한다. 마지막 빗장이라 넉넉해도 손해가 적다.
  *
  * ⚠️ 기본값을 10분 → 25분으로 올렸다(2026-08-24). agent-compose 가 `select_clips` 의
  * thinking 가드를 480 → **900초**로, 전송 타임아웃을 600 → 1200초로 올렸다(0d95b9f).
@@ -219,6 +220,7 @@ const NODE_LABEL: Record<string, string> = {
   refine_start_bound: "클립 시작 정하는 중",
   finish: "편성 마무리 중",
   end_empty: "맞는 장면을 찾지 못함",
+  // 원샷을 쓰지 않으므로 편성 잡에서는 더 이상 오지 않는다 — agent 계약이 남아 있어 표기만 유지.
   render: "영상 만드는 중",
 };
 
@@ -271,12 +273,11 @@ export class AgentError extends Error {
 export interface StartComposeParams {
   vId: number;
   query: string;
-  /** 상한 초. 사용자가 고른 "최대 N분" — agent 는 이 값을 넘는 만큼 중요도 낮은 클립부터 버린다. */
-  budgetSec: number;
-  /** 편성에 이어 렌더까지 한 잡에서 갈지(원샷). false 면 편성만 한다. */
-  render: boolean;
-  /** 이닝 사이 범퍼 — 이어지는 렌더에 쓰인다. `render=false` 면 의미 없다. */
-  bumper: boolean;
+  /**
+   * 상한 초. 사용자가 고른 "최대 N분" — agent 는 이 값을 넘는 만큼 중요도 낮은 클립부터 버린다.
+   * `null` 은 화면의 "없음" — 상한 없이 고른 장면을 다 담는다(agent 쪽 기본값과 같다).
+   */
+  budgetSec: number | null;
 }
 
 /** 편성 접수 — 잠금을 잡고 202 의 job_id 를 돌려준다. 이미 처리 중이면 BusyError. */
@@ -299,18 +300,17 @@ export async function startCompose(p: StartComposeParams): Promise<{ jobId: stri
           // ⚠️ 필드명은 `budget` 이 아니라 **`budget_sec`** 이다 — 2026-08-24 에 인자가
           // 되살아나면서 이름도 바뀌었다(agent 0d95b9f). 구 이름으로 보내면 pydantic 이
           // 조용히 버려서 절단이 통째로 안 걸린다(에러도 안 난다).
-          // 원샷 — 편성이 ok 면 이어서 렌더까지 간다. 잡 폴링으로 진행이 보이므로
-          // 브라우저가 동기 응답을 기다리지 않는다(렌더 단독 호출의 약점을 피한다).
-          // 화면에서 끄면 편성만 하고, 영상은 결과 화면에서 따로 만든다.
-          render: p.render,
-          bumper: p.bumper,
+          // **원샷은 쓰지 않는다**(2026-08-24 결정) — 편성 요청은 편성만 하고, 영상은
+          // 결과 화면의 렌더(범퍼 선택 포함)로 따로 만든다. agent 기본값도 false 지만
+          // 계약을 눈에 보이게 두려고 명시한다. bumper 는 렌더 인자라 보내지 않는다.
+          render: false,
         }),
       },
       30_000,
     );
     lock = { jobId: res.job_id, vId: p.vId, since: Date.now() };
     log.info("편성 접수", {
-      vId: p.vId, jobId: res.job_id, budgetSec: p.budgetSec, render: p.render, bumper: p.bumper,
+      vId: p.vId, jobId: res.job_id, budgetSec: p.budgetSec,
     });
     // 화면이 폴링해 주지 않아도 서버가 끝을 확인하고 잠금을 푼다.
     jobVideo.set(res.job_id, p.vId);
@@ -368,8 +368,7 @@ const RENDER_ACCEPT_TIMEOUT_MS = 60_000;
  * ⚠️ 2026-08-24 계약 변경 — 단독 `POST /api/v1/render` 는 이제 워커에 `sync_yn=false` 로
  * 접수만 하고 **202 {status:"accepted"}** 를 즉시 돌려준다. 완료는 agent-compose 의
  * 백그라운드 폴러가 확인해 `t_compose.render_datetime`·`render_status` 에 기록한다
- * (원샷 `render=true` 경로는 여전히 동기라 잡 폴링으로 끝까지 보인다 — LOCK_TTL_MS 가
- * 두 단계의 합인 이유).
+ * (원샷 `render=true` 경로는 agent 에 남아 있지만 **이 화면은 쓰지 않는다** — 2026-08-24 결정).
  *   → 호출부는 이 함수가 돌아왔다고 "영상이 만들어졌다"고 말하면 안 된다. 화면은
  *     `render_status`(1=만드는 중)로 상태를 읽는다.
  *

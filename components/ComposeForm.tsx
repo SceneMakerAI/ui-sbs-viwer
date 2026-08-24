@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { BUDGET_OPTIONS, DEFAULT_BUDGET_SEC } from "@/lib/domain/budget";
 
-const EXAMPLES = ["홈런 모음", "이닝별 하이라이트", "역전 장면만", "득점 장면"];
+const EXAMPLES = ["삼진 모음", "이닝별 하이라이트 장면들", "역전 장면만", "홈런 장면", "득점 장면"];
 
 /** 진행 폴링 주기(ms). 편성은 1~3분 걸린다. */
 const POLL_MS = 3000;
@@ -14,48 +14,11 @@ const RETRY_MS = 5000;
 
 type Phase = "idle" | "waiting" | "running";
 
-/** 스위치 하나. 최대 길이 옆 옵션들이 같은 모양을 쓰므로 한 곳에 둔다. */
-function Toggle({
-  checked,
-  disabled,
-  label,
-  onToggle,
-}: {
-  checked: boolean;
-  disabled: boolean;
-  label: string;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onToggle}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
-        checked ? "bg-brand-blue" : "bg-line"
-      }`}
-    >
-      <span
-        className={`absolute top-0.5 block h-5 w-5 rounded-full bg-surface transition-all ${
-          checked ? "left-[22px]" : "left-0.5"
-        }`}
-      />
-    </button>
-  );
-}
-
 export default function ComposeForm({ vId }: { vId: number }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [budgetSec, setBudgetSec] = useState<number>(DEFAULT_BUDGET_SEC);
-  // 편성에 이어 하이라이트 영상까지 한 번에 만들지(원샷). 끄면 편성만 하고,
-  // 영상은 결과 화면에서 따로 만든다. 기본 On — 지금까지의 동작이다.
-  const [render, setRender] = useState(true);
-  // 범퍼는 영상을 만들 때만 쓰는 출력 옵션이라 위 토글에 딸린다.
-  const [bumper, setBumper] = useState(true);
+  // `null` 은 "없음"(상한 미적용) — 0 이나 -1 같은 표식 대신 그대로 null 을 보낸다.
+  const [budgetSec, setBudgetSec] = useState<number | null>(DEFAULT_BUDGET_SEC);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -129,7 +92,7 @@ export default function ComposeForm({ vId }: { vId: number }) {
       const r = await fetch("/api/compose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vId, query: query.trim(), budgetSec, render, bumper: render && bumper }),
+        body: JSON.stringify({ vId, query: query.trim(), budgetSec }),
       });
       // 게이트웨이(nginx)가 끼어들면 본문이 HTML 이라 JSON 파싱이 터진다 —
       // 그때도 상태 코드로 상황을 구분해야 해서 파싱 실패를 삼킨다.
@@ -169,7 +132,7 @@ export default function ComposeForm({ vId }: { vId: number }) {
       setError("편성 요청 중 오류가 발생했습니다.");
       setPhase("idle");
     }
-  }, [budgetSec, bumper, poll, query, render, vId]);
+  }, [budgetSec, poll, query, vId]);
 
   submitRef.current = submit;
 
@@ -195,7 +158,7 @@ export default function ComposeForm({ vId }: { vId: number }) {
         rows={2}
         maxLength={200}
         disabled={phase !== "idle"}
-        placeholder="예) 경기 흐름을 바꾼 결정적 장면"
+        placeholder="예) 이닝별 하이라이트 장면들"
         aria-label="편성할 장면 설명"
         className="mt-4 w-full resize-none rounded border border-line bg-surface-alt px-4 py-3 text-sm outline-none focus:border-brand-blue disabled:opacity-60"
       />
@@ -216,73 +179,33 @@ export default function ComposeForm({ vId }: { vId: number }) {
       </div>
 
       <div className="mt-5 flex flex-col gap-4 border-t border-line pt-5 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
-          <div>
-            {/* 이제 budget 은 실제로 지켜지는 상한이다 — 넘치는 만큼 중요도가 낮은 클립부터
-                버린다(덜어내기 전용, lib/domain/budget.ts). 모자라면 모자란 대로 나온다. */}
-            <p className="text-xs text-text-muted">최대 길이</p>
-            <div className="mt-1.5 inline-flex rounded border border-line p-1">
-              {BUDGET_OPTIONS.map((o) => (
-                <button
-                  key={o.sec}
-                  type="button"
-                  disabled={phase !== "idle"}
-                  onClick={() => setBudgetSec(o.sec)}
-                  aria-pressed={budgetSec === o.sec}
-                  className={`rounded px-4 py-1.5 text-sm transition-colors disabled:opacity-50 ${
-                    budgetSec === o.sec
-                      ? "bg-ink font-bold text-on-dark"
-                      : "text-text-secondary hover:text-text-primary"
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1.5 max-w-[15rem] text-xs text-text-muted">
-              넘으면 덜 중요한 장면부터 빠집니다. 짧게 나올 수도 있습니다.
-            </p>
+        <div>
+          {/* 이제 budget 은 실제로 지켜지는 상한이다 — 넘치는 만큼 중요도가 낮은 클립부터
+              버린다(덜어내기 전용, lib/domain/budget.ts). 모자라면 모자란 대로 나온다. */}
+          <p className="text-xs text-text-muted">최대 길이</p>
+          <div className="mt-1.5 inline-flex rounded border border-line p-1">
+            {BUDGET_OPTIONS.map((o) => (
+              <button
+                key={o.label}
+                type="button"
+                disabled={phase !== "idle"}
+                onClick={() => setBudgetSec(o.sec)}
+                aria-pressed={budgetSec === o.sec}
+                className={`rounded px-4 py-1.5 text-sm transition-colors disabled:opacity-50 ${
+                  budgetSec === o.sec
+                    ? "bg-ink font-bold text-on-dark"
+                    : "text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
-
-          {/* 왼쪽의 "최대 길이"(편성 조건)와 오른쪽 옵션(영상 출력)은 성격이 다르다 — 세로선으로 가른다. */}
-          {/* 두 스위치는 위쪽(라벨)을 맞춰 나란히 서게 한다 — 아래 안내문 길이가 서로 달라서
-              items-end 로 두면 스위치 높이가 어긋난다. */}
-          <div className="flex flex-wrap items-start gap-x-8 gap-y-4 sm:border-l sm:border-line sm:pl-8">
-            <div>
-              <p className="text-xs text-text-muted">하이라이트 영상 바로 생성</p>
-              <div className="mt-1.5 flex items-center gap-2 py-1.5">
-                <Toggle
-                  checked={render}
-                  disabled={phase !== "idle"}
-                  label="하이라이트 영상 바로 생성"
-                  onToggle={() => setRender((v) => !v)}
-                />
-                <span className="text-sm text-text-secondary">{render ? "생성" : "편성만"}</span>
-              </div>
-              {/* 안내문이 길어져도 옆 칸을 밀어내지 않게 폭을 묶고 접히게 둔다. */}
-              <p className="mt-1 max-w-[13rem] text-xs text-text-muted">
-                {render
-                  ? "영상 생성에 추가 시간이 필요합니다."
-                  : "영상은 결과 화면에서 만들 수 있습니다."}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs text-text-muted">이닝 사이 범퍼</p>
-              <div className="mt-1.5 flex items-center gap-2 py-1.5">
-                <Toggle
-                  checked={render && bumper}
-                  // 영상을 안 만들면 범퍼가 들어갈 자리도 없다.
-                  disabled={phase !== "idle" || !render}
-                  label="이닝 사이 범퍼 넣기"
-                  onToggle={() => setBumper((v) => !v)}
-                />
-                <span className={`text-sm ${render ? "text-text-secondary" : "text-text-muted"}`}>
-                  {render ? (bumper ? "넣기" : "안 넣기") : "해당 없음"}
-                </span>
-              </div>
-            </div>
-          </div>
+          <p className="mt-1.5 max-w-[15rem] text-xs text-text-muted">
+            {budgetSec === null
+              ? "상한 없이 고른 장면을 모두 담습니다."
+              : "넘으면 덜 중요한 장면부터 빠집니다. 짧게 나올 수도 있습니다."}
+          </p>
         </div>
 
         <button
@@ -311,7 +234,8 @@ export default function ComposeForm({ vId }: { vId: number }) {
             {progress.length > 0 ? progress[progress.length - 1] : "편성을 시작하는 중"}
           </p>
           <p className="mt-1 text-xs text-text-muted">
-            장면을 고른 뒤 영상까지 만듭니다. 보통 몇 분 걸리니 이 페이지를 열어 두세요.
+            질의에 맞는 장면을 고릅니다. 보통 몇 분 걸리니 이 페이지를 열어 두세요.
+            영상은 편성이 끝난 뒤 결과 화면에서 만들 수 있습니다.
           </p>
         </div>
       )}

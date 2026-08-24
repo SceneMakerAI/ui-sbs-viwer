@@ -8,18 +8,19 @@ import { createLogger } from "@/lib/server/log";
 const log = createLogger("api/compose");
 
 /**
- * 길이는 화면의 5/10/15/20분(lib/domain/budget.ts)과 1:1. 그 밖의 값은 받지 않는다.
+ * 길이는 화면의 5/10/15분·없음(lib/domain/budget.ts)과 1:1. 그 밖의 값은 받지 않는다.
+ * "없음"은 `null` — agent 로 그대로 넘겨 절단을 걸지 않는다.
  *
  * ⚠️ 이 인자는 2026-08-24 하루 사이에 **폐기됐다가 되살아났다**(agent-compose 94b58dc → 0d95b9f).
  * 지금은 `budget_sec` 이라는 이름의 **덜어내기 전용 상한**이다 — 자세한 건 budget.ts.
+ *
+ * 렌더 인자는 받지 않는다(2026-08-24) — **편성 요청은 편성만 한다.** 영상은 결과 화면에서
+ * `POST /api/render`(범퍼 선택 포함)로 따로 만든다. 원샷 경로를 화면에서 없앤 결정이다.
  */
 const Body = z.object({
   vId: z.number().int().positive(),
   query: z.string().trim().min(2).max(200),
-  budgetSec: z.union([z.literal(300), z.literal(600), z.literal(900), z.literal(1200)]),
-  /** 편성에 이어 하이라이트 영상까지 한 번에 만들지(원샷). 끄면 편성만 한다. */
-  render: z.boolean(),
-  bumper: z.boolean(),
+  budgetSec: z.union([z.literal(300), z.literal(600), z.literal(900), z.null()]),
 });
 
 /** 진행 중 여부만 확인 — 화면 진입 시 배너 표시용(PAGES.md §5). */
@@ -32,7 +33,7 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
-  const { vId, query, budgetSec, render, bumper } = parsed.data;
+  const { vId, query, budgetSec } = parsed.data;
 
   // 노출 대상 영상인지 서버에서 재검증한다 — v_id 는 주소창으로 바꿔 넣을 수 있다.
   const video = await getVideo(vId);
@@ -46,7 +47,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { jobId } = await startCompose({ vId, query, budgetSec, render, bumper });
+    const { jobId } = await startCompose({ vId, query, budgetSec });
     return NextResponse.json({ jobId }, { status: 202 });
   } catch (e) {
     if (e instanceof BusyError) {
