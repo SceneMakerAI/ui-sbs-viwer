@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { BusyError, busyState, startCompose, AgentError } from "@/lib/server/compose-agent";
+import {
+  QueueFullError,
+  composeCompatState,
+  enqueueCompose,
+  PENDING_MAX,
+} from "@/lib/server/queue";
 import { getVideo } from "@/lib/server/videos";
 import { isComposable } from "@/lib/domain/status";
 import { createLogger } from "@/lib/server/log";
@@ -23,11 +28,23 @@ const Body = z.object({
   budgetSec: z.union([z.literal(300), z.literal(600), z.literal(900), z.null()]),
 });
 
-/** 진행 중 여부만 확인 — 화면 진입 시 배너 표시용(PAGES.md §5). */
+/**
+ * ⚠️ **하위 호환 뷰**(deprecated). 큐 도입 전 화면(전역 진행 바)이 쓰던 `{busy, since, job}` 모양을
+ * 유지한다. 신규 화면은 **`GET /api/queue`** 를 써야 한다 — 대기 순번·렌더 레인은 여기 안 보인다.
+ */
 export async function GET() {
-  return NextResponse.json(busyState());
+  return NextResponse.json(composeCompatState());
 }
 
+/**
+ * 편성 접수 — **항상 받는다**(2026-08-24 큐 전환).
+ *
+ * 예전에는 처리 중이면 409 `COMPOSE_BUSY` 로 거절하고 클라이언트가 5초마다 재시도해
+ * 대기열처럼 보이게 했다. 그 구조는 서버가 대기자를 모르니 순번을 말할 수 없었고, 탭을
+ * 닫으면 요청이 사라졌다. 이제 서버 큐(`lib/server/queue.ts`)가 요청을 들고 순서대로 보낸다.
+ *   → 응답은 **202 + 티켓**이다. 진행은 `GET /api/queue` 또는 `GET /api/queue/ticket/{id}` 로 본다.
+ *   → 거절은 대기열 포화(503 `QUEUE_FULL`)뿐이다.
+ */
 export async function POST(req: Request) {
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
@@ -47,16 +64,21 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { jobId } = await startCompose({ vId, query, budgetSec });
-    return NextResponse.json({ jobId }, { status: 202 });
+    const ticket = enqueueCompose({ vId, query, budgetSec });
+    return NextResponse.json(ticket, { status: 202 });
   } catch (e) {
-    if (e instanceof BusyError) {
-      // 에러가 아니라 "대기" 상태다 — 클라이언트는 배너를 띄우고 재시도한다.
-      return NextResponse.json({ code: "COMPOSE_BUSY", ...busyState() }, { status: 409 });
-    }
-    if (e instanceof AgentError) {
-      log.error("편성 접수 실패", { vId, status: e.status, code: e.code });
-      return NextResponse.json({ error: "편성 요청을 접수하지 못했습니다." }, { status: 502 });
+    if (e instanceof QueueFullError) {
+      // 실패가 아니라 "지금은 너무 붐빈다"다 — 화면은 재시도 시각을 안내한다.
+      log.warn("대기열 포화 — 접수 거절", { vId, max: PENDING_MAX });
+      return NextResponse.json(
+        {
+          code: "QUEUE_FULL",
+          error: "대기 중인 요청이 많습니다. 5~10분 뒤에 다시 시도해 주세요.",
+          max: e.max,
+          retryAfterSec: e.retryAfterSec,
+        },
+        { status: 503, headers: { "Retry-After": String(e.retryAfterSec) } },
+      );
     }
     log.error("편성 접수 오류", { vId, message: String(e) });
     return NextResponse.json({ error: "편성 요청 중 오류가 발생했습니다." }, { status: 500 });
