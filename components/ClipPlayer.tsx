@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
 import RenderOptionDialog from "./RenderOptionDialog";
 import { formatDuration, formatInning, formatScoreWithTeams, formatTimecode, type Teams } from "@/lib/format";
 import type { Clip, Compose } from "@/lib/types";
@@ -154,6 +154,8 @@ export default function ClipPlayer({
   };
 
   const bumperAvailable = new Set(clips.map((c) => c.inning).filter(Boolean)).size > 1;
+  /** 하이라이트 영상을 만들 수 있는 편성인가 — 빈 편성·실패한 편성은 이어붙일 것이 없다. */
+  const canRender = compose.status === "ok" && clips.length > 0;
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
@@ -170,18 +172,41 @@ export default function ClipPlayer({
             >
               원본 구간 재생
             </button>
-            <button
-              type="button"
-              disabled={!renderUrl}
-              onClick={() => setMode("render")}
-              aria-pressed={mode === "render"}
-              className={`rounded px-4 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                mode === "render" ? "bg-ink font-bold text-on-dark" : "text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              {/* "렌더"는 내부 용어다 — 화면에는 사용자가 아는 말로만 쓴다. */}
-              {renderUrl ? "하이라이트 영상" : "하이라이트 영상 없음"}
-            </button>
+            {/* "렌더"는 내부 용어다 — 화면에는 사용자가 아는 말로만 쓴다.
+                영상이 없을 때 이 칸은 **죽은 버튼이 아니라 만들기 버튼**이다(2026-08-24) —
+                예전엔 여기 "하이라이트 영상 없음"(비활성)을 두고 오른쪽 아래에 안내문+버튼을
+                따로 뒀는데, 같은 말을 두 곳에서 하고 누를 곳은 멀리 있었다. */}
+            {renderUrl ? (
+              <button
+                type="button"
+                onClick={() => setMode("render")}
+                aria-pressed={mode === "render"}
+                className={`rounded px-4 py-1.5 text-sm transition-colors ${
+                  mode === "render" ? "bg-ink font-bold text-on-dark" : "text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                하이라이트 영상
+              </button>
+            ) : compose.renderStatus === 1 ? (
+              // 이미 만드는 중이면 누를 수 없다 — 중복 요청은 GPU 를 두 번 잡을 뿐이다.
+              <span className="flex items-center gap-1.5 rounded px-4 py-1.5 text-sm text-text-muted">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                하이라이트 영상 만드는 중
+              </span>
+            ) : canRender ? (
+              <RenderOptionDialog
+                compId={compose.compId}
+                clipCount={clips.length}
+                defaultBumper={compose.bumper}
+                bumperAvailable={bumperAvailable}
+                label={compose.renderStatus === -1 ? "하이라이트 영상 다시 만들기" : "하이라이트 영상으로 만들기"}
+                className="flex items-center gap-1.5 rounded px-4 py-1.5 text-sm font-bold text-brand-blue transition-colors hover:bg-brand-blue-soft"
+              />
+            ) : (
+              <span className="rounded px-4 py-1.5 text-sm text-text-muted opacity-60">
+                하이라이트 영상 없음
+              </span>
+            )}
           </div>
 
           {/* 내려받기는 **렌더 영상 모드에서만** 보인다 — 원본 구간 재생 중에 뜨면
@@ -288,30 +313,6 @@ export default function ClipPlayer({
           })}
           </ol>
 
-          {!renderUrl && compose.status === "ok" && clips.length > 0 && (
-            <div className="shrink-0 rounded-lg border border-line p-4">
-              {/* 이미 만드는 중이면 버튼을 내린다 — 중복 요청은 GPU 를 두 번 잡을 뿐이다. */}
-              {compose.renderStatus === 1 ? (
-                <p className="text-xs text-text-secondary">
-                  하이라이트 영상을 만들고 있습니다. 완성되면 이 화면에서 볼 수 있습니다.
-                </p>
-              ) : (
-                <>
-                  <p className="mb-3 text-xs text-text-secondary">
-                    {compose.renderStatus === -1
-                      ? "하이라이트 영상을 만들지 못했습니다. 다시 시도할 수 있습니다."
-                      : "아직 하이라이트 영상이 없습니다. 하나로 이어붙여 만들면 내려받을 수 있습니다."}
-                  </p>
-                  <RenderOptionDialog
-                    compId={compose.compId}
-                    clipCount={clips.length}
-                    defaultBumper={compose.bumper}
-                    bumperAvailable={bumperAvailable}
-                  />
-                </>
-              )}
-            </div>
-          )}
         </div>
       </aside>
     </div>

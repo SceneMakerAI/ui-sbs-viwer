@@ -85,3 +85,24 @@ export interface ComposeJob {
   compId?: number;
   error?: string;
 }
+
+/**
+ * 편성 클립 목록의 "영상 묶어 보기" 한 줄 — 영상 1개 + 그 영상의 편성 집계.
+ * 조회는 `lib/server/composes.ts` 의 `listVideoGroups()`(PAGES.md §2-3).
+ */
+export interface VideoGroup {
+  vId: number;
+  name: string;
+  /** 원본 길이(초). */
+  playTime: number;
+  cateName: string | null;
+  regDatetime: string;
+  /** 이 영상의 전체 편성 건수. */
+  composeCount: number;
+  /** 클립 영상(렌더)까지 준비된 편성 건수. */
+  readyCount: number;
+  /** 검색어에 걸린 편성 건수. 검색이 없으면 composeCount 와 같다. */
+  matchCount: number;
+  /** 마지막 편성 시각(ISO). 편성이 없으면 null. */
+  lastComposeAt: string | null;
+}

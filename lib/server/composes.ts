@@ -8,7 +8,7 @@
  */
 import "server-only";
 import { query } from "./db";
-import type { Clip, Compose } from "@/lib/types";
+import type { Clip, Compose, VideoGroup } from "@/lib/types";
 
 const SBS_ONLY = "v.is_sbs = 1";
 
@@ -244,4 +244,128 @@ export async function getSummary(): Promise<{ videos: number; composes: number; 
          WHERE ${SBS_ONLY} AND cp.render_datetime IS NOT NULL)                     AS rendered`,
   );
   return { videos: Number(row.videos), composes: Number(row.composes), rendered: Number(row.rendered) };
+}
+
+/* ── 영상 묶어 보기(그룹 모드) ───────────────────────────────────────── */
+
+/**
+ * 편성 클립 목록의 **기본 보기**는 영상 묶음이다(2026-08-24 결정, PAGES.md §2-3).
+ * 목록의 단위가 편성이 아니라 영상이므로 t_video 를 축으로 t_compose 를 집계한다.
+ *
+ * 이 함수를 videos.ts 가 아니라 여기 두는 이유: 두 번째 쿼리(`listComposesByVideos`)가
+ * 같은 `SELECT`·`toCompose` 를 쓰고, 이 화면의 관심사는 어디까지나 편성이다.
+ * 영상 쪽 컬럼은 표시에 필요한 것만 가져온다(is_sbs 는 여기서도 select 하지 않는다).
+ * 반환 타입 `VideoGroup` 은 클라이언트 컴포넌트도 쓰므로 `lib/types.ts` 에 둔다.
+ */
+
+export type GroupSort = "recent" | "video" | "composes";
+
+const GROUP_ORDER_BY: Record<GroupSort, string> = {
+  // 편성이 없는 영상은 last_compose_at 이 NULL 이라 DESC 에서 뒤로 밀린다(MariaDB).
+  recent: "last_compose_at DESC, v.reg_datetime DESC",
+  video: "v.reg_datetime DESC, v.v_id DESC",
+  composes: "compose_cnt DESC, last_compose_at DESC",
+};
+
+/**
+ * 검색은 **클립까지 본다**(2026-08-24 결정) — 영상 제목 또는 편성 질의가 걸리면 남는다.
+ * 편성 1건의 일치 판정은 `listComposes` 와 **같은 식**이어야 한다: 제목이 걸린 영상은
+ * 그 영상의 편성 전부가 일치로 잡혀야(캐러셀이 비지 않게) 하기 때문이다.
+ */
+const MATCH = "(cp.query LIKE ? OR v.name LIKE ?)";
+
+export interface ListVideoGroupsParams {
+  q?: string;
+  sort?: GroupSort;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listVideoGroups(
+  p: ListVideoGroupsParams = {},
+): Promise<{ items: VideoGroup[]; total: number }> {
+  const q = p.q?.trim();
+  const like = q ? `%${q}%` : null;
+  const limit = Math.min(Math.max(p.limit ?? 15, 1), 100);
+  const offset = Math.max(p.offset ?? 0, 0);
+
+  // 검색 조건은 영상 단위다 — 제목이 걸리거나, 걸리는 편성을 하나라도 가진 영상.
+  const searchSql = q
+    ? `AND (v.name LIKE ?
+            OR EXISTS (SELECT 1 FROM t_compose x WHERE x.v_id = v.v_id AND x.query LIKE ?))`
+    : "";
+  const searchParams = q ? [like, like] : [];
+
+  const rows = await query<{
+    v_id: number; name: string; play_time: number; cate_name: string | null;
+    reg_datetime: Date; compose_cnt: number; ready_cnt: number; match_cnt: number;
+    last_compose_at: Date | null;
+  }>(
+    `SELECT v.v_id, v.name, v.play_time, v.reg_datetime, c.cate_name,
+            COUNT(cp.comp_id) AS compose_cnt,
+            SUM(CASE WHEN cp.render_datetime IS NOT NULL OR cp.render_status = 0
+                     THEN 1 ELSE 0 END) AS ready_cnt,
+            ${q ? `SUM(CASE WHEN ${MATCH} THEN 1 ELSE 0 END)` : "COUNT(cp.comp_id)"} AS match_cnt,
+            MAX(cp.reg_datetime) AS last_compose_at
+       FROM t_video v
+       LEFT JOIN t_category c ON c.cate_id = v.cate_id
+       LEFT JOIN t_compose  cp ON cp.v_id  = v.v_id
+      WHERE ${SBS_ONLY} ${searchSql}
+      GROUP BY v.v_id, v.name, v.play_time, v.reg_datetime, c.cate_name
+      ORDER BY ${GROUP_ORDER_BY[p.sort ?? "recent"]}
+      LIMIT ? OFFSET ?`,
+    [...(q ? [like, like] : []), ...searchParams, limit, offset],
+  );
+
+  const [{ cnt }] = await query<{ cnt: number }>(
+    `SELECT COUNT(*) AS cnt FROM t_video v WHERE ${SBS_ONLY} ${searchSql}`,
+    searchParams,
+  );
+
+  return {
+    items: rows.map((r) => ({
+      vId: r.v_id,
+      name: r.name,
+      playTime: Number(r.play_time),
+      cateName: r.cate_name,
+      regDatetime: r.reg_datetime.toISOString(),
+      composeCount: Number(r.compose_cnt),
+      readyCount: Number(r.ready_cnt),
+      matchCount: Number(r.match_cnt),
+      lastComposeAt: r.last_compose_at ? r.last_compose_at.toISOString() : null,
+    })),
+    total: Number(cnt),
+  };
+}
+
+/**
+ * 한 페이지에 걸린 영상들의 편성을 **한 번에** 가져온다 — 영상마다 쿼리를 날리지 않는다.
+ * 캐러셀은 펼치기 전부터 DOM 에 있으므로(펼침은 표시 전환일 뿐) 미리 받아 둔다.
+ *
+ * 영상당 상한을 둔다: 편성이 수백 건인 영상이 생기면 캐러셀이 아니라 목록이 필요하다 —
+ * 그때는 "클립만 보기"가 정답이다. 상한을 넘으면 최근 것만 싣고 화면이 그 사실을 말한다.
+ */
+export const GROUP_COMPOSE_MAX = 30;
+
+export async function listComposesByVideos(
+  vIds: number[],
+  q?: string,
+): Promise<Record<number, Compose[]>> {
+  const out: Record<number, Compose[]> = {};
+  if (vIds.length === 0) return out;
+
+  const like = q?.trim() ? `%${q.trim()}%` : null;
+  const holes = vIds.map(() => "?").join(",");
+  const rows = await query<Row>(
+    `${SELECT} WHERE ${SBS_ONLY} AND cp.v_id IN (${holes})
+       ${like ? `AND ${MATCH}` : ""}
+       ORDER BY cp.v_id ASC, cp.reg_datetime DESC, cp.comp_id DESC`,
+    like ? [...vIds, like, like] : [...vIds],
+  );
+
+  for (const r of rows) {
+    const list = (out[r.v_id] ??= []);
+    if (list.length < GROUP_COMPOSE_MAX) list.push(toCompose(r));
+  }
+  return out;
 }
