@@ -47,7 +47,7 @@ export default async function DashboardPage() {
       <div className="mx-auto max-w-[1280px] space-y-12 px-4 py-10 sm:px-6 sm:py-12">
         <section>
           <div className="mb-4 flex items-end justify-between gap-4">
-            <h2 className="text-lg font-bold">업로드 영상</h2>
+            <h2 className="text-lg font-bold">분석 완료 영상</h2>
             <Link
               href="/videos"
               className="inline-flex items-center gap-1 text-sm font-bold text-brand-blue hover:underline"

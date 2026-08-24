@@ -1,6 +1,6 @@
 # ui-sbs-viwer
 
-SceneMaker SBS 공개 뷰어 — 업로드 영상 탐색 · 클립 편성 · 결과 재생.
+SceneMaker SBS 공개 뷰어 — 분석 완료 영상 탐색 · 클립 편성 · 결과 재생.
 
 ## 실행
 

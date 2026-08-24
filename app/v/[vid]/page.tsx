@@ -31,7 +31,7 @@ export default async function VideoDetailPage({ params }: { params: Promise<{ vi
         className="inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"
       >
         <ChevronLeft className="h-4 w-4" aria-hidden />
-        업로드 영상
+        분석 완료 영상
       </Link>
 
       <div className="mt-3 flex flex-wrap items-start justify-between gap-4 border-b border-line pb-6">

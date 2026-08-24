@@ -10,7 +10,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * ⚠️ 고객사 IP 대역을 확보하기 전에 외부 오픈이 필요해지면 로그인을 1순위로 되돌린다.
  */
 export default function proxy(req: NextRequest) {
-  // 데모 기간 대시보드(/) 임시 비활성화 — 진입 시 업로드 영상 목록으로 보낸다.
+  // 데모 기간 대시보드(/) 임시 비활성화 — 진입 시 분석 완료 영상 목록으로 보낸다.
   // 되돌릴 때 이 블록만 지우면 된다 (Header.tsx 의 MENU 주석도 함께).
   if (req.nextUrl.pathname === "/") {
     return NextResponse.redirect(new URL("/videos", req.url));

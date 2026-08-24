@@ -1,17 +1,17 @@
 import { Info, Upload } from "lucide-react";
 import { PIPELINE_STAGES } from "@/lib/domain/status";
 
-export const metadata = { title: "업로드 · SceneMaker" };
+export const metadata = { title: "영상 업로드/분석 · SceneMaker" };
 
 /**
- * 업로드 페이지 — **비활성 전시**(PAGES.md §1-F).
+ * 영상 업로드/분석 페이지 — **비활성 전시**(PAGES.md §1-F).
  * 실제 제출은 막되 화면은 실제처럼 보여준다. 파이프라인 4단계 도식은 과제 설명 자료 역할도 한다.
  */
 export default function UploadPage() {
   return (
     <div className="mx-auto max-w-[900px] space-y-8 px-4 py-8 sm:px-6 sm:py-10">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">업로드</h1>
+        <h1 className="text-2xl font-bold tracking-tight">영상 업로드/분석</h1>
         <p className="mt-2 text-sm text-text-secondary">
           경기 영상을 올리면 분석을 거쳐 장면을 골라낼 수 있게 됩니다.
         </p>

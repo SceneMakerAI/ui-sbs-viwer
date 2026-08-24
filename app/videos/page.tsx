@@ -44,7 +44,7 @@ export default async function VideosPage({
   return (
     <div className="mx-auto max-w-[1280px] space-y-6 px-4 py-8 sm:px-6 sm:py-10">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">업로드 영상</h1>
+        <h1 className="text-2xl font-bold tracking-tight">분석 완료 영상</h1>
         <p className="mt-2 text-sm text-text-secondary">
           분석이 끝난 영상을 골라 원하는 장면을 클립으로 편성할 수 있습니다.
         </p>

@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-/** 메뉴 4종 — 순서 고정(PAGES.md §2-1-1). */
+/** 메뉴 4종 — 순서 고정(PAGES.md §2-1-1). `disabled` 는 보이되 못 누르는 항목. */
 const MENU = [
   // { href: "/", label: "대시보드" },   // 데모 기간 임시 비활성화 (proxy.ts 에서 /videos 로 리다이렉트)
-  { href: "/upload", label: "업로드" },
-  { href: "/videos", label: "업로드 영상" },
+  { href: "/upload", label: "영상 업로드/분석", disabled: true },   // 업로드 자체가 비활성 전시(PAGES.md §1-F)
+  { href: "/videos", label: "분석 완료 영상" },
   { href: "/clips", label: "편성 클립" },
 ] as const;
 
@@ -30,6 +30,21 @@ export default function Header() {
         {/* 모바일에서 메뉴 4개가 가로 스크롤된다 — 스크롤바는 숨겨 헤더가 지저분해지지 않게. */}
         <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] sm:gap-2 [&::-webkit-scrollbar]:hidden">
           {MENU.map((m) => {
+            const disabled = "disabled" in m && m.disabled;
+            // 비활성 메뉴는 링크가 아니라 문구로 둔다 — 보이기는 하되 눌리지 않게.
+            if (disabled) {
+              return (
+                <span
+                  key={m.href}
+                  aria-disabled="true"
+                  title="준비 중입니다"
+                  className="shrink-0 cursor-not-allowed px-3 py-2 text-sm text-on-dark-dim opacity-50 select-none"
+                >
+                  {m.label}
+                </span>
+              );
+            }
+
             const active = isActive(pathname, m.href);
             return (
               <Link
