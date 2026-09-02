@@ -4,20 +4,29 @@
  * 노출 범위는 영상과 동일하게 `is_sbs = 1` 로 강제한다 — comp_id 는 추측 가능한 정수라
  * 조인으로 막지 않으면 다른 고객 영상의 편성이 열린다.
  *
- * 읽기 전용이다. `render_datetime` 기록은 agent-compose 가 한다(PAGES.md §10).
+ * ⚠️ **2026-09-02 스키마 교체(agent-compose2) — 편성의 키는 `(v_id, comp_id)` 복합키다.**
+ * comp_id 가 영상 안에서 1부터 다시 매겨지므로 **comp_id 만으로 조회하면 안 된다**
+ * (실측: 27건 중 comp_id 는 7종뿐이고 comp_id=1 이 6개 영상에 있다). 이 파일의 모든
+ * 편성·클립 조회는 두 값을 함께 받고, 클립 조인도 `v_id` 와 `comp_id` 를 **둘 다** 건다 —
+ * comp_id 만으로 조인하면 여러 영상의 클립이 한 편성에 섞여 나온다.
+ *
+ * 읽기 전용이다. 상태 기록은 agent-compose 가 한다(PAGES.md §10).
  */
 import "server-only";
 import { query } from "./db";
+import { sanitizeCodeText, CODE } from "@/lib/domain/status";
 import type { Clip, Compose, VideoGroup } from "@/lib/types";
 
 const SBS_ONLY = "v.is_sbs = 1";
 
 const SELECT = `
-  SELECT cp.comp_id, cp.v_id, cp.query, cp.budget_sec, cp.status, cp.duration,
-         cp.clip_cnt, cp.bumper_yn, cp.render_datetime, cp.render_status, cp.reg_datetime,
-         v.name AS video_name
+  SELECT cp.comp_id, cp.v_id, cp.query, cp.budget_sec, cp.status_code, cp.duration_sec,
+         cp.clip_cnt, cp.bumper_yn, cp.reg_datetime,
+         v.name AS video_name,
+         t.name AS status_name, t.description AS status_desc
     FROM t_compose cp
     JOIN t_video v ON v.v_id = cp.v_id
+    LEFT JOIN t_code t ON t.code = cp.status_code
 `;
 
 interface Row {
@@ -25,13 +34,14 @@ interface Row {
   v_id: number;
   video_name: string;
   query: string;
-  budget_sec: number;
-  status: string;
-  duration: number;
+  budget_sec: number | null;
+  status_code: number;
+  status_name: string | null;
+  status_desc: string | null;
+  duration_sec: number;
   clip_cnt: number;
-  bumper_yn: number;
-  render_datetime: Date | null;
-  render_status: number | null;
+  /** 'Y' / 'N' — 예전 스키마의 tinyint 1/0 이 아니다. */
+  bumper_yn: string;
   reg_datetime: Date;
 }
 
@@ -41,13 +51,14 @@ function toCompose(r: Row): Compose {
     vId: r.v_id,
     videoName: r.video_name,
     query: r.query,
-    budgetSec: r.budget_sec,
-    status: r.status,
-    duration: Number(r.duration),
+    budgetSec: r.budget_sec == null ? null : Number(r.budget_sec),
+    statusCode: Number(r.status_code),
+    statusName: sanitizeCodeText(r.status_name),
+    statusDesc: sanitizeCodeText(r.status_desc),
+    duration: Number(r.duration_sec),
     clipCount: Number(r.clip_cnt),
-    bumper: r.bumper_yn === 1,
-    renderedAt: r.render_datetime ? r.render_datetime.toISOString() : null,
-    renderStatus: r.render_status == null ? null : Number(r.render_status),
+    // 'Y'/'N' 을 대소문자 구분 없이 받는다 — 상류가 소문자로 쓸 여지를 남긴다.
+    bumper: String(r.bumper_yn).toUpperCase() === "Y",
     regDatetime: r.reg_datetime.toISOString(),
   };
 }
@@ -55,8 +66,9 @@ function toCompose(r: Row): Compose {
 export type ComposeSort = "recent" | "duration" | "clips";
 
 const ORDER_BY: Record<ComposeSort, string> = {
-  recent: "cp.reg_datetime DESC, cp.comp_id DESC",
-  duration: "cp.duration DESC",
+  // comp_id 는 영상 안에서만 증가하므로 전역 정렬의 2차 키로는 v_id 를 함께 쓴다.
+  recent: "cp.reg_datetime DESC, cp.v_id DESC, cp.comp_id DESC",
+  duration: "cp.duration_sec DESC",
   clips: "cp.clip_cnt DESC",
 };
 
@@ -99,38 +111,48 @@ export async function listComposes(p: ListComposesParams = {}): Promise<{ items:
   return { items: rows.map(toCompose), total: Number(cnt) };
 }
 
-/** 단건 조회. 노출 대상이 아니면 null. */
-export async function getCompose(compId: number): Promise<Compose | null> {
-  const rows = await query<Row>(`${SELECT} WHERE ${SBS_ONLY} AND cp.comp_id = ?`, [compId]);
+/**
+ * 단건 조회. 노출 대상이 아니면 null.
+ *
+ * ⚠️ `vId` 는 선택 인자가 아니다 — comp_id 만으로는 편성이 특정되지 않는다.
+ */
+export async function getCompose(vId: number, compId: number): Promise<Compose | null> {
+  const rows = await query<Row>(
+    `${SELECT} WHERE ${SBS_ONLY} AND cp.v_id = ? AND cp.comp_id = ?`,
+    [vId, compId],
+  );
   return rows[0] ? toCompose(rows[0]) : null;
 }
 
-/** 편성에 속한 클립 목록. 시간은 SQL TIME → 초로 변환해 내보낸다. */
-export async function listClips(compId: number): Promise<Clip[]> {
+/**
+ * 편성에 속한 클립 목록.
+ *
+ * 구간은 이제 **정수 초 컬럼**(`start_sec`/`end_sec`)이라 `TIME_TO_SEC` 변환이 없다.
+ * ⚠️ 조인은 `v_id` 와 `comp_id` 를 **둘 다** 건다 — comp_id 만 걸면 같은 번호를 가진
+ * 다른 영상의 클립까지 딸려 온다(실측: comp_id=1 이 6개 영상에 존재).
+ */
+export async function listClips(vId: number, compId: number): Promise<Clip[]> {
   const rows = await query<{
-    clip_seq: number; start: number; end: number;
-    labels: string | null; inning: string | null;
-    score_before: string | null; score_after: string | null;
+    clip_seq: number; start_sec: number; end_sec: number; scene_no: number;
+    tags: string | null; labels: string | null; inning: string | null;
   }>(
-    `SELECT cc.clip_seq,
-            TIME_TO_SEC(cc.start_time) AS start,
-            TIME_TO_SEC(cc.end_time)   AS end,
-            cc.labels, cc.inning, cc.score_before, cc.score_after
+    `SELECT cc.clip_seq, cc.start_sec, cc.end_sec, cc.scene_no,
+            cc.tags, cc.labels, cc.inning
        FROM t_compose_clip cc
-       JOIN t_compose cp ON cp.comp_id = cc.comp_id
-       JOIN t_video   v  ON v.v_id     = cp.v_id
-      WHERE ${SBS_ONLY} AND cc.comp_id = ?
+       JOIN t_compose cp ON cp.v_id = cc.v_id AND cp.comp_id = cc.comp_id
+       JOIN t_video   v  ON v.v_id  = cp.v_id
+      WHERE ${SBS_ONLY} AND cc.v_id = ? AND cc.comp_id = ?
       ORDER BY cc.clip_seq ASC`,
-    [compId],
+    [vId, compId],
   );
   return rows.map((r) => ({
     seq: r.clip_seq,
-    start: Number(r.start),
-    end: Number(r.end),
+    start: Number(r.start_sec),
+    end: Number(r.end_sec),
+    sceneNo: Number(r.scene_no),
+    tags: r.tags,
     labels: r.labels,
     inning: r.inning,
-    scoreBefore: r.score_before,
-    scoreAfter: r.score_after,
   }));
 }
 
@@ -150,9 +172,11 @@ function stripScore(s: string): string {
 /**
  * 대결 팀명(원정, 홈).
  *
- * `t_compose_clip.score_*` 는 "2-0" 처럼 숫자만 있어서 어느 팀 점수인지 알 수 없다.
+ * ⚠️ 출처가 두 번 바뀌었다. 2026-09-02 스키마 교체로 `t_compose_clip.score_before`·`score_after`
+ * 마저 **삭제**돼, 클립 단위 스코어 표기는 더 이상 만들 수 없다(화면에서도 걷어냈다).
+ * 팀명만은 아래 경로로 남는다 — 향후 스코어 표기를 되살린다면 출처를 새로 정해야 한다.
  *
- * ⚠️ 출처가 바뀌었다(2026-08-23 상류 개편) — 예전엔 `t_scene_baseball.score` 가
+ * 앞선 변경(2026-08-23 상류 개편) — 예전엔 `t_scene_baseball.score` 가
  * "{원정} {원정점}-{홈점} {홈}" 을 들고 있었으나 **그 컬럼이 사라졌다**(전이 원장 폐기,
  * vision3 migration_20260823i). 지금 팀명의 유일한 출처는 화면 정보 자막
  * `t_frame_baseball_board_detail(kind='TEAM')` 이고, agent-compose `repos.fetch_teams` 와
@@ -199,18 +223,18 @@ export async function getTeams(vId: number): Promise<{ away: string; home: strin
  * 편성이 없으면 null → 호출부가 기본값을 쓴다.
  */
 export async function getThumbSec(vId: number, compId?: number): Promise<number | null> {
-  const rows = await query<{ start: number }>(
-    `SELECT TIME_TO_SEC(cc.start_time) AS start
+  const rows = await query<{ start_sec: number }>(
+    `SELECT cc.start_sec
        FROM t_compose_clip cc
-       JOIN t_compose cp ON cp.comp_id = cc.comp_id
-       JOIN t_video   v  ON v.v_id     = cp.v_id
-      WHERE ${SBS_ONLY} AND cp.v_id = ?
+       JOIN t_compose cp ON cp.v_id = cc.v_id AND cp.comp_id = cc.comp_id
+       JOIN t_video   v  ON v.v_id  = cp.v_id
+      WHERE ${SBS_ONLY} AND cc.v_id = ?
         ${compId != null ? "AND cc.comp_id = ?" : ""}
       ORDER BY cc.comp_id ASC, cc.clip_seq ASC
       LIMIT 1`,
     compId != null ? [vId, compId] : [vId],
   );
-  return rows[0] ? Number(rows[0].start) : null;
+  return rows[0] ? Number(rows[0].start_sec) : null;
 }
 
 /**
@@ -226,24 +250,32 @@ export async function findComposeSince(vId: number, since: Date): Promise<number
        FROM t_compose cp
        JOIN t_video v ON v.v_id = cp.v_id
       WHERE ${SBS_ONLY} AND cp.v_id = ? AND cp.reg_datetime >= ?
-      ORDER BY cp.comp_id DESC
+      ORDER BY cp.reg_datetime DESC, cp.comp_id DESC
       LIMIT 1`,
     [vId, since],
   );
   return rows[0] ? Number(rows[0].comp_id) : null;
 }
 
-/** 대시보드 요약 지표. */
-export async function getSummary(): Promise<{ videos: number; composes: number; rendered: number }> {
-  const [row] = await query<{ videos: number; composes: number; rendered: number }>(
+/**
+ * 대시보드 요약 지표.
+ *
+ * ⚠️ 세 번째 지표는 예전엔 "완성 영상"(`render_datetime IS NOT NULL`)이었으나 그 컬럼이
+ * 삭제돼 **DB 로는 mp4 존재를 셀 수 없다**(2026-09-02). 지표 하나를 위해 편성마다 S3 를
+ * 조회할 수는 없으므로 **정상 완료된 편성 수**로 바꾸고, 화면 라벨도 그에 맞춰 고쳤다.
+ * 세지 못하는 값을 옛 이름으로 계속 내보내면 화면이 조용히 거짓말을 한다.
+ */
+export async function getSummary(): Promise<{ videos: number; composes: number; completed: number }> {
+  const [row] = await query<{ videos: number; composes: number; completed: number }>(
     `SELECT
        (SELECT COUNT(*) FROM t_video v WHERE ${SBS_ONLY})                          AS videos,
        (SELECT COUNT(*) FROM t_compose cp JOIN t_video v ON v.v_id = cp.v_id
          WHERE ${SBS_ONLY})                                                        AS composes,
        (SELECT COUNT(*) FROM t_compose cp JOIN t_video v ON v.v_id = cp.v_id
-         WHERE ${SBS_ONLY} AND cp.render_datetime IS NOT NULL)                     AS rendered`,
+         WHERE ${SBS_ONLY} AND cp.status_code = ?)                                 AS completed`,
+    [CODE.COMPOSE_OK],
   );
-  return { videos: Number(row.videos), composes: Number(row.composes), rendered: Number(row.rendered) };
+  return { videos: Number(row.videos), composes: Number(row.composes), completed: Number(row.completed) };
 }
 
 /* ── 영상 묶어 보기(그룹 모드) ───────────────────────────────────────── */
@@ -303,8 +335,7 @@ export async function listVideoGroups(
   }>(
     `SELECT v.v_id, v.name, v.play_time, v.reg_datetime, c.cate_name,
             COUNT(cp.comp_id) AS compose_cnt,
-            SUM(CASE WHEN cp.render_datetime IS NOT NULL OR cp.render_status = 0
-                     THEN 1 ELSE 0 END) AS ready_cnt,
+            SUM(CASE WHEN cp.status_code = ${CODE.COMPOSE_OK} THEN 1 ELSE 0 END) AS ready_cnt,
             ${q ? `SUM(CASE WHEN ${MATCH} THEN 1 ELSE 0 END)` : "COUNT(cp.comp_id)"} AS match_cnt,
             MAX(cp.reg_datetime) AS last_compose_at
        FROM t_video v

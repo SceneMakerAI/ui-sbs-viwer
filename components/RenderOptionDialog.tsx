@@ -19,31 +19,41 @@ import {
  * 출력 옵션이라, 편성 폼에 두면 편성 결과가 달라지는 것처럼 읽힌다.
  * 기본값은 On — worker-render 자체 기본값과 같다.
  *
+ * ⚠️ 2026-08-24 — **이닝 그룹 수와 무관하게 항상 고를 수 있다.** 예전에는 "이닝이 하나뿐이면
+ * 들어갈 자리가 없다"며 토글을 비활성화했는데, 전제가 틀렸다. 범퍼는 이닝이 바뀌는 *사이*가
+ * 아니라 **각 그룹 맨 앞**에 붙는다 — 워커가 그룹마다 그 이닝의 카드를 하나씩 끼운다
+ * (worker-render `lib/svc/compose.py:to_media_parts` 소스 확인). 그래서 그룹이 하나여도
+ * 맨 앞에 하나 들어간다.
+ *
  * 여는 버튼의 문구·모양은 호출부가 정한다(2026-08-24) — 이 버튼은 재생 방식 전환 묶음 안에서
  * `하이라이트 영상 없음` 자리를 대신하므로, 그 묶음의 칸 모양을 그대로 써야 한다.
  *
  * 2026-08-24 큐 전환 — 확인을 누르면 **렌더 레인에 들어간다**(편성 레인과 별개, 동시 1건).
  * 접수 응답은 "만들기 시작했다"가 아니라 "대기열에 들어갔다"는 뜻이라, 순서를 기다리는 동안은
- * 버튼 자리에 **대기 순번**을 보여준다(그 사이 `render_status` 는 아직 1 이 아니라 화면이
- * "만드는 중"으로 바뀌지 않는다). 티켓은 편성별로 브라우저에 남겨 새로고침에도 이어 보인다.
+ * 버튼 자리에 **대기 순번**을 보여준다(그 사이 `status_code` 는 아직 4050 이 아니라 화면이
+ * "만드는 중"으로 바뀌지 않는다). 티켓은 편성별(`vId:compId`)로 브라우저에 남겨 새로고침에도
+ * 이어 보인다.
  * 한 편성에 하이라이트 하나 — 같은 편성을 다시 넣으면 서버가 기존 티켓을 돌려준다.
  */
 export default function RenderOptionDialog({
+  vId,
   compId,
   clipCount,
   defaultBumper,
-  /** 이닝 그룹이 하나뿐이면 범퍼가 들어갈 자리가 없다. */
-  bumperAvailable,
   label = "이 편성으로 하이라이트 만들기",
   className = "inline-flex w-full items-center justify-center gap-2 rounded bg-brand-blue px-4 py-3 text-sm font-bold text-on-dark transition-colors hover:bg-brand-blue-hover",
 }: {
+  /** ⚠️ compId 만으로는 편성이 특정되지 않는다(복합키) — 티켓 키·요청 모두 이 값이 필요하다. */
+  vId: number;
   compId: number;
   clipCount: number;
   defaultBumper: boolean;
-  bumperAvailable: boolean;
   label?: string;
   className?: string;
 }) {
+
+  // 렌더 티켓은 편성 단위로 기억한다 — 영상 안에서만 유일한 comp_id 라 v_id 와 묶어야 한다.
+  const ticketKey = `${vId}:${compId}`;
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [bumper, setBumper] = useState(defaultBumper);
@@ -57,25 +67,25 @@ export default function RenderOptionDialog({
 
   // 새로고침·재접속 복구 — 이 편성에 걸어 둔 요청이 있으면 이어서 보여준다.
   useEffect(() => {
-    const saved = readTicket("render", compId);
+    const saved = readTicket("render", ticketKey);
     if (saved) setTicketId(saved);
-  }, [compId]);
+  }, [ticketKey]);
 
-  // 끝났으면 화면을 새로 읽는다 — 완료 판정의 정본은 `t_compose`(render_status·render_datetime)라
-  // 서버 컴포넌트를 다시 그려야 "준비됨"으로 바뀐다.
+  // 끝났으면 화면을 새로 읽는다 — "준비됨" 판정에는 S3 확인이 필요해서(2026-09-02: 완료 기록
+  // 컬럼이 삭제됐다) 서버 컴포넌트를 다시 그려야 상태가 바뀐다.
   useEffect(() => {
     if (!ticket || isActive(ticket)) return;
-    forgetTicket("render", compId);
+    forgetTicket("render", ticketKey);
     if (!refreshed.current) {
       refreshed.current = true;
       router.refresh();
     }
-  }, [ticket, compId, router]);
+  }, [ticket, ticketKey, router]);
 
   const run = async () => {
     setRunning(true);
     setError(null);
-    const res = await postRender({ compId, bumper: bumperAvailable && bumper });
+    const res = await postRender({ vId, compId, bumper });
     setRunning(false);
 
     if (!res.ok) {
@@ -92,7 +102,7 @@ export default function RenderOptionDialog({
     }
     // 접수됐을 뿐 아직 만들어지지 않았다. 순번은 티켓으로 따라간다.
     refreshed.current = false;
-    rememberTicket("render", compId, res.ticket.ticketId);
+    rememberTicket("render", ticketKey, res.ticket.ticketId);
     setTicketId(res.ticket.ticketId);
     setOpen(false);
   };
@@ -139,7 +149,7 @@ export default function RenderOptionDialog({
               <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-1.5 text-sm font-bold">
-                  이닝 사이에 범퍼 넣기
+                  이닝 앞에 범퍼 넣기
                   <button
                     type="button"
                     onClick={() => setHelp((v) => !v)}
@@ -152,25 +162,23 @@ export default function RenderOptionDialog({
                   </button>
                 </p>
                 <p className="mt-1 text-xs text-text-muted">
-                  {bumperAvailable
-                    ? "이닝이 바뀔 때 짧은 전환 영상을 넣습니다."
-                    : "이닝이 하나뿐이라 범퍼가 들어갈 자리가 없습니다."}
+                  각 이닝이 시작하는 자리에 짧은 이닝 안내 영상을 넣습니다.
                 </p>
               </div>
               <button
                 type="button"
                 role="switch"
-                aria-checked={bumperAvailable && bumper}
-                aria-label="이닝 사이에 범퍼 넣기"
-                disabled={!bumperAvailable || running}
+                aria-checked={bumper}
+                aria-label="이닝 앞에 범퍼 넣기"
+                disabled={running}
                 onClick={() => setBumper((v) => !v)}
                 className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
-                  bumperAvailable && bumper ? "bg-brand-blue" : "bg-line"
+                  bumper ? "bg-brand-blue" : "bg-line"
                 }`}
               >
                 <span
                   className={`absolute top-0.5 block h-5 w-5 rounded-full bg-surface transition-all ${
-                    bumperAvailable && bumper ? "left-[22px]" : "left-0.5"
+                    bumper ? "left-[22px]" : "left-0.5"
                   }`}
                 />
               </button>
@@ -191,9 +199,10 @@ export default function RenderOptionDialog({
                     className="aspect-video w-full rounded bg-ink"
                   />
                   <p className="mt-2 text-xs leading-relaxed text-text-muted">
-                    이닝이 바뀌는 자리에 위와 같은 <b>2초짜리 전환 영상</b>이 들어갑니다. 어느 이닝으로
-                    넘어가는지 알려 줘서, 장면이 갑자기 튀는 느낌을 줄여 줍니다. (예시는 1회말 범퍼이며
-                    실제로는 해당 이닝에 맞는 것이 들어갑니다.)
+                    각 이닝이 시작하는 자리에 위와 같은 <b>2초짜리 안내 영상</b>이 들어갑니다. 지금
+                    보는 장면이 몇 회인지 알려 줘서, 장면이 갑자기 튀는 느낌을 줄여 줍니다. 이닝이
+                    하나뿐인 편성도 맨 앞에 하나 들어갑니다. (예시는 1회말 범퍼이며 실제로는 해당
+                    이닝에 맞는 것이 들어갑니다.)
                   </p>
                 </div>
               )}

@@ -10,7 +10,7 @@ export default function ComposeRow({ compose, showVideo = false }: { compose: Co
 
   return (
     <Link
-      href={`/c/${compose.compId}`}
+      href={`/v/${compose.vId}/c/${compose.compId}`}
       className="flex items-center gap-3 rounded-lg border border-line bg-surface p-3 transition-colors hover:border-brand-blue sm:gap-4"
     >
       <Thumb

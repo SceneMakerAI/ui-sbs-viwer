@@ -7,11 +7,17 @@ import {
   findRenderTicket,
 } from "@/lib/server/queue";
 import { getCompose } from "@/lib/server/composes";
+import { isRendering } from "@/lib/server/render-status";
+import { composePhase } from "@/lib/domain/compose-state";
+import { exists, renderKey } from "@/lib/server/s3";
 import { createLogger } from "@/lib/server/log";
 
 const log = createLogger("api/render");
 
 const Body = z.object({
+  // ⚠️ vId 는 필수다 — comp_id 가 영상 안에서만 유일해져(2026-09-02) 단독으로는
+  //    편성을 특정하지 못한다.
+  vId: z.number().int().positive(),
   compId: z.number().int().positive(),
   bumper: z.boolean(),
 });
@@ -24,38 +30,49 @@ const Body = z.object({
  * (편성 레인과 별개, 각 동시 1건). 응답 202 는 "만들기 시작했다"도 아니고
  * **"대기열에 들어갔다"**는 뜻이다. 진행은 `GET /api/queue/ticket/{id}` 로 본다.
  *
- * 편성 1건 : 하이라이트 1건 — 같은 `compId` 를 다시 넣으면 새 작업을 만들지 않고
- * **기존 티켓을 그대로 돌려준다**(`dedup: true`). 완료 판정의 정본은 `t_compose` 다.
+ * 편성 1건 : 하이라이트 1건 — 같은 편성(`vId`+`compId`)을 다시 넣으면 새 작업을 만들지 않고
+ * **기존 티켓을 그대로 돌려준다**(`dedup: true`). 진행 판정의 정본은 `t_compose.status_code`,
+ * 산출물 존재의 정본은 S3 다.
  */
 export async function POST(req: Request) {
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
-  const { compId, bumper } = parsed.data;
+  const { vId, compId, bumper } = parsed.data;
 
   // 재시작 전에 시작된 렌더가 있으면 슬롯을 먼저 되돌린다 — 워커에 겹쳐 넣지 않기 위해.
   await ensureAdopted();
 
   // 노출 대상 편성인지 재검증(getCompose 가 is_sbs 조인으로 걸러낸다).
-  const compose = await getCompose(compId);
+  const compose = await getCompose(vId, compId);
   if (!compose) return NextResponse.json({ error: "편성을 찾을 수 없습니다." }, { status: 404 });
 
-  if (compose.renderedAt) {
+  // 이미 만들어져 있는가 — `status_code=4000` 은 편성 완료와 렌더 완료를 구분하지 못하므로
+  // (2026-09-02 스키마 교체) S3 존재가 유일한 근거다. 큐도 접수 직전에 같은 확인을 한다.
+  if (await exists(renderKey(vId, compId)).catch(() => false)) {
     return NextResponse.json(
       { code: "ALREADY_RENDERED", error: "이미 만들어진 영상이 있습니다." },
       { status: 409 },
     );
   }
-  if (compose.status !== "ok" || compose.clipCount === 0) {
+  // 이어붙일 수 있는 편성인가 — 아직 편성 중이거나 실패·빈 편성이면 만들 것이 없다.
+  // (렌더만 실패한 편성은 클립이 멀쩡하므로 다시 만들 수 있다.)
+  const phase = composePhase(compose);
+  if ((phase !== "composed" && phase !== "render_failed") || compose.clipCount === 0) {
     return NextResponse.json(
-      { error: "클립이 없는 편성은 영상으로 만들 수 없습니다." },
+      {
+        error:
+          phase === "composing"
+            ? "아직 편성 중인 요청입니다. 편성이 끝난 뒤에 다시 시도해 주세요."
+            : "클립이 없는 편성은 영상으로 만들 수 없습니다.",
+      },
       { status: 409 },
     );
   }
   // 진행 중 중복 — 우리 큐가 그 작업을 들고 있으면 티켓을 돌려주는 게 맞다(에러가 아니다).
-  if (compose.renderStatus === 1) {
-    const queued = findRenderTicket(compId);
+  if (isRendering(compose.statusCode)) {
+    const queued = findRenderTicket(vId, compId);
     if (queued) return NextResponse.json({ ...queued, dedup: true }, { status: 202 });
     // 큐 밖에서 돌고 있다(다른 경로 접수 등) — agent 도 같은 이유로 막는다.
     return NextResponse.json(
@@ -66,11 +83,11 @@ export async function POST(req: Request) {
 
   try {
     const ticket = enqueueRender({ compId, vId: compose.vId, bumper });
-    log.info("렌더 접수", { compId, bumper, ticketId: ticket.ticketId, dedup: ticket.dedup });
+    log.info("렌더 접수", { vId, compId, bumper, ticketId: ticket.ticketId, dedup: ticket.dedup });
     return NextResponse.json(ticket, { status: 202 });
   } catch (e) {
     if (e instanceof QueueFullError) {
-      log.warn("렌더 대기열 포화 — 접수 거절", { compId, max: e.max });
+      log.warn("렌더 대기열 포화 — 접수 거절", { vId, compId, max: e.max });
       return NextResponse.json(
         {
           code: "QUEUE_FULL",
@@ -81,7 +98,7 @@ export async function POST(req: Request) {
         { status: 503, headers: { "Retry-After": String(e.retryAfterSec) } },
       );
     }
-    log.error("렌더 접수 오류", { compId, message: String(e) });
+    log.error("렌더 접수 오류", { vId, compId, message: String(e) });
     return NextResponse.json({ error: "영상 생성 요청 중 오류가 발생했습니다." }, { status: 500 });
   }
 }

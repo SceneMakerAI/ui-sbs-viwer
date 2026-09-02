@@ -121,6 +121,8 @@ export const CODE = {
   /** 발행된 장면이 없어 편성 자체가 불가능. */
   COMPOSE_ERROR_SOURCE: 4910,
   COMPOSE_ERROR_RENDER: 4950,
+  /** mp4 는 만들어졌으나 편성에 완료 기록을 남기지 못함 — 재렌더 전에 확인이 필요하다. */
+  COMPOSE_ERROR_STAMP: 4960,
 } as const;
 
 export { band };

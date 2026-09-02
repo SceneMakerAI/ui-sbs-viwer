@@ -179,9 +179,18 @@ const RENDER_ACCEPT_TIMEOUT_MS = 60_000;
  *
  * ⚠️ 2026-08-24 계약 — 단독 `POST /api/v1/render` 는 워커에 `sync_yn=false` 로 접수만
  * 하고 **202 {status:"accepted"}** 를 즉시 돌려준다. 완료는 agent-compose 의 백그라운드
- * 폴러가 확인해 `t_compose.render_datetime`·`render_status` 에 기록한다.
+ * 폴러가 확인해 `t_compose.status_code` 에 기록한다(4050 → 4000/4950).
  *   → 이 함수가 돌아온 것은 "영상이 만들어졌다"가 아니라 "만들기 시작했다"는 뜻이다.
- *     완료 판정은 큐가 DB(`render_status`)를 보고 한다(`lib/server/render-status.ts`).
+ *     완료 판정은 큐가 DB(`status_code`)를 보고 한다(`lib/server/render-status.ts`).
+ *
+ * ⚠️ **2026-09-02 — 상류 계약이 아직 새 스키마를 못 따라왔다.** `t_compose` 의 PK 가
+ * `(v_id, comp_id)` 로 바뀌었는데 `POST /api/v1/render` 의 `RenderRequest` 는 여전히
+ * `comp_id` 만 받는다(openapi 확인). comp_id 는 이제 영상 안에서만 유일하므로 **그것만으로는
+ * 편성이 특정되지 않는다.** 그래서 `v_id` 를 함께 실어 보낸다 —
+ *   · 지금의 agent 는 pydantic 이 모르는 필드를 조용히 버리므로 **해가 없고**,
+ *   · 상류가 `v_id` 를 받도록 고쳐지면 **코드 변경 없이 곧바로 맞물린다**.
+ * 다만 그때까지 렌더 요청은 상류에서 실패한다(배포된 agent 는 삭제된 컬럼을 읽어
+ * `INTERNAL_ERROR` 를 낸다 — 실측 2026-09-02). 요청 사항은 `REQUEST_agent-compose.md` 참조.
  *
  * 중복 차단·완료 스탬프는 agent-compose 가 소유한다(409 COMPOSE_ALREADY_RENDERED /
  * RENDER_IN_PROGRESS). UI 서버가 대신 UPDATE 하지 않는다 — DB 계정을 SELECT 전용으로
@@ -189,10 +198,10 @@ const RENDER_ACCEPT_TIMEOUT_MS = 60_000;
  *
  * **호출자는 큐뿐이다** — 편성 1건 : 하이라이트 1건 규칙을 큐의 중복 키가 지킨다.
  */
-export async function acceptRender(compId: number, bumper: boolean): Promise<unknown> {
+export async function acceptRender(vId: number, compId: number, bumper: boolean): Promise<unknown> {
   return request(
     "/render",
-    { method: "POST", body: JSON.stringify({ comp_id: compId, bumper }) },
+    { method: "POST", body: JSON.stringify({ v_id: vId, comp_id: compId, bumper }) },
     RENDER_ACCEPT_TIMEOUT_MS,
   );
 }

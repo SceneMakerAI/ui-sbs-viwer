@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import RenderOptionDialog from "./RenderOptionDialog";
-import { formatDuration, formatInning, formatScoreWithTeams, formatTimecode, type Teams } from "@/lib/format";
+import { formatDuration, formatInning, formatTimecode } from "@/lib/format";
+import type { ComposePhase } from "@/lib/domain/compose-state";
 import type { Clip, Compose } from "@/lib/types";
 
 type Mode = "source" | "render";
@@ -15,17 +16,24 @@ type Mode = "source" | "render";
  *
  * 클립 클릭 → 구간 이동은 **원본 모드에서만** 의미가 있다.
  * 렌더본은 이미 한 편으로 이어붙어 있어 이동이 필요 없다.
+ *
+ * ⚠️ 2026-09-02 — 클립별 **스코어 표기가 사라졌다.** 근거였던 `t_compose_clip.score_before`·
+ * `score_after` 컬럼이 삭제됐기 때문이다. 그 자리에는 같은 스키마 교체로 새로 생긴
+ * `tags`(전광판 사건 태그)를 쓴다 — "득점" 배지도 스코어 변화 대신 이 태그로 판정한다.
+ *
+ * 상태 판정(`phase`)은 서버가 넘겨준다 — "준비됨" 은 S3 확인이 필요해서 클라이언트가
+ * 스스로 알 수 없다(lib/domain/compose-state.ts).
  */
 export default function ClipPlayer({
   compose,
   clips,
-  teams,
+  phase,
   sourceUrl,
   renderUrl,
 }: {
   compose: Compose;
   clips: Clip[];
-  teams: Teams | null;
+  phase: ComposePhase;
   sourceUrl: string | null;
   renderUrl: string | null;
 }) {
@@ -41,25 +49,30 @@ export default function ClipPlayer({
    * 렌더 영상에서 각 클립이 **몇 초 지점부터** 시작하는지.
    *
    * 렌더본은 클립을 순서대로 이어붙인 것이라 누적 길이가 곧 시작 지점이다.
-   * 다만 이닝이 바뀌는 자리에 범퍼가 들어갈 수 있어 그만큼 밀린다 — 범퍼 길이는 DB 에 없으므로
-   * **실제 영상 길이와 클립 합계의 차이**를 이닝 경계 수로 나눠 되찾는다.
+   * 다만 범퍼가 들어가면 그만큼 밀린다 — 범퍼 길이는 DB 에 없으므로
+   * **실제 영상 길이와 클립 합계의 차이**를 범퍼 개수로 나눠 되찾는다.
+   *
+   * ⚠️ 범퍼는 이닝이 **바뀌는 자리**가 아니라 **각 이닝 그룹 맨 앞**에 붙는다 — 첫 그룹 앞에도
+   * 하나 붙는다(worker-render `lib/svc/compose.py:to_media_parts`, 2026-08-24 소스 확인).
+   * 그래서 나누는 수는 경계 수(그룹−1)가 아니라 **그룹 수**이고, 첫 클립도 범퍼만큼 밀린다.
+   * 예전 계산은 경계 수로 나눠서 첫 범퍼를 통째로 놓쳤고, 이닝이 하나뿐인 편성은 아예
+   * 보정이 0 이었다(그래서 렌더본에서 클립을 누르면 범퍼 길이만큼 어긋났다).
    * (범퍼 없이 렌더된 경우 차이가 0 이라 그대로 누적합이 된다. 실측 comp 14: 42클립 합계 1018초 = 영상 1018초.)
    */
   const renderOffsets = useMemo(() => {
     const durations = clips.map((c) => c.end - c.start);
     const clipSum = durations.reduce((a, b) => a + b, 0);
 
-    const boundaries = clips.reduce(
-      (n, c, i) => (i > 0 && c.inning !== clips[i - 1].inning ? n + 1 : n),
-      0,
-    );
+    // 그룹 = 이닝이 바뀌는 지점마다 새로 시작한다. 첫 클립도 그룹의 시작이다.
+    const isGroupStart = (i: number) => i === 0 || clips[i].inning !== clips[i - 1].inning;
+    const groups = clips.reduce((n, _c, i) => (isGroupStart(i) ? n + 1 : n), 0);
     const extra = renderDuration != null ? Math.max(0, renderDuration - clipSum) : 0;
     // 차이가 1초 미만이면 인코딩 오차로 보고 무시한다.
-    const gap = boundaries > 0 && extra >= 1 ? extra / boundaries : 0;
+    const gap = groups > 0 && extra >= 1 ? extra / groups : 0;
 
     let at = 0;
     return clips.map((c, i) => {
-      if (i > 0 && c.inning !== clips[i - 1].inning) at += gap;
+      if (isGroupStart(i)) at += gap;
       const start = at;
       at += durations[i];
       return { seq: c.seq, start, end: at };
@@ -153,9 +166,11 @@ export default function ClipPlayer({
     if (el.currentTime < clip.start - 0.5 || el.currentTime > clip.end) setActiveSeq(null);
   };
 
-  const bumperAvailable = new Set(clips.map((c) => c.inning).filter(Boolean)).size > 1;
-  /** 하이라이트 영상을 만들 수 있는 편성인가 — 빈 편성·실패한 편성은 이어붙일 것이 없다. */
-  const canRender = compose.status === "ok" && clips.length > 0;
+  /**
+   * 하이라이트 영상을 만들 수 있는 편성인가 — 빈 편성·편성 실패는 이어붙일 것이 없다.
+   * 렌더만 실패한 편성(`render_failed`)은 클립이 멀쩡하므로 다시 만들 수 있다.
+   */
+  const canRender = (phase === "composed" || phase === "render_failed") && clips.length > 0;
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
@@ -187,7 +202,7 @@ export default function ClipPlayer({
               >
                 하이라이트 영상
               </button>
-            ) : compose.renderStatus === 1 ? (
+            ) : phase === "rendering" ? (
               // 이미 만드는 중이면 누를 수 없다 — 중복 요청은 GPU 를 두 번 잡을 뿐이다.
               <span className="flex items-center gap-1.5 rounded px-4 py-1.5 text-sm text-text-muted">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
@@ -195,11 +210,11 @@ export default function ClipPlayer({
               </span>
             ) : canRender ? (
               <RenderOptionDialog
+                vId={compose.vId}
                 compId={compose.compId}
                 clipCount={clips.length}
                 defaultBumper={compose.bumper}
-                bumperAvailable={bumperAvailable}
-                label={compose.renderStatus === -1 ? "하이라이트 영상 다시 만들기" : "하이라이트 영상으로 만들기"}
+                label={phase === "render_failed" ? "하이라이트 영상 다시 만들기" : "하이라이트 영상으로 만들기"}
                 className="flex items-center gap-1.5 rounded px-4 py-1.5 text-sm font-bold text-brand-blue transition-colors hover:bg-brand-blue-soft"
               />
             ) : (
@@ -213,7 +228,7 @@ export default function ClipPlayer({
               지금 보고 있는 원본을 받는 것처럼 읽힌다(실제로 받는 건 이어붙인 결과물이다). */}
           {renderUrl && mode === "render" && (
             <a
-              href={`/api/clips/${compose.compId}/download`}
+              href={`/api/clips/${compose.vId}/${compose.compId}/download`}
               className="ml-auto inline-flex items-center gap-1.5 rounded border border-line px-3 py-2 text-sm font-bold text-text-secondary transition-colors hover:border-brand-blue hover:text-brand-blue"
             >
               <Download className="h-4 w-4" aria-hidden />
@@ -263,9 +278,18 @@ export default function ClipPlayer({
           <ol ref={listRef} className="max-h-[60vh] min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 lg:max-h-none">
           {clips.map((clip) => {
             const inning = formatInning(clip.inning);
-            // 스코어는 팀명과 함께 보여준다 — "2-0" 만으로는 어느 팀 점수인지 알 수 없다.
-            const score = formatScoreWithTeams(clip.scoreAfter, teams);
-            const scored = clip.scoreBefore !== null && clip.scoreBefore !== clip.scoreAfter;
+            // 사건 태그(전광판 판독 사본) — 예전 스코어 자리를 대신한다. 콤마 구분 문자열이다.
+            const tags = (clip.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+            /**
+             * "득점" 배지 — 예전엔 `score_before !== score_after`(스코어가 실제로 움직였는가)로
+             * 판정했으나 그 두 컬럼이 삭제됐다. 지금은 태그·라벨의 득점성 어휘로 대신한다.
+             * ⚠️ 근사치다: 득점 사실이 아니라 **득점으로 읽히는 표기가 붙었는가**를 본다.
+             * `적시타`(주자를 불러들인 안타)는 `labels` 쪽에 붙으므로 둘 다 훑어야 한다 —
+             * 태그만 보면 "안타+적시타" 인 실제 득점 클립을 놓친다(v203 편성 4 실측).
+             */
+            const scored = [...tags, ...(clip.labels ?? "").split(",")].some((t) =>
+              /득점|홈런|적시타/.test(t),
+            );
             const playing = activeSeq === clip.seq;
 
             return (
@@ -296,9 +320,16 @@ export default function ClipPlayer({
                   </span>
 
                   <span className="mt-1.5 flex items-center justify-between gap-2">
-                    {score && (
-                      <span className={`text-xs ${scored ? "font-bold text-text-primary" : "text-text-secondary"}`}>
-                        {score}
+                    {tags.length > 0 && (
+                      <span className="flex min-w-0 flex-wrap items-center gap-1">
+                        {tags.slice(0, 3).map((t) => (
+                          <span
+                            key={t}
+                            className="rounded bg-surface-alt px-1.5 py-0.5 text-[11px] text-text-secondary"
+                          >
+                            {t}
+                          </span>
+                        ))}
                       </span>
                     )}
                     {mode === "source" && (

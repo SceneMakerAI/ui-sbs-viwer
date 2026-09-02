@@ -47,12 +47,14 @@ export function formatInning(inning: string | null | undefined): string | null {
   return ko ? `${ko[1]}회${ko[2]}` : inning;
 }
 
-/** "3:2" 형태의 스코어 전후를 "1:0 → 3:0" 으로. 한쪽이 없으면 있는 쪽만. */
-export function formatScoreChange(before: string | null, after: string | null): string | null {
-  if (before && after && before !== after) return `${before} → ${after}`;
-  return after ?? before ?? null;
-}
-
+/**
+ * 대결 팀명. `getTeams`(화면 정보 자막 판독)의 반환 타입이자 편성 상세 헤더의 표시 재료다.
+ *
+ * ⚠️ 2026-09-02 — 스코어 포매터(`formatScoreChange`·`formatScoreWithTeams`)는 **삭제했다.**
+ * 근거 컬럼인 `t_compose_clip.score_before`·`score_after` 가 스키마 교체로 사라져
+ * 넣어 줄 값이 없어졌기 때문이다. 클립 단위 표기는 새로 생긴 `tags` 로 대체했다
+ * (components/ClipPlayer.tsx). 스코어 표기를 되살리려면 출처부터 새로 정해야 한다.
+ */
 export interface Teams {
   /** 원정(스코어 앞 숫자). */
   away: string;
@@ -60,13 +62,3 @@ export interface Teams {
   home: string;
 }
 
-/**
- * "2-0" + 팀명 → "KT 2 : 0 NC".
- * 팀명을 모르거나 형식이 다르면 원문을 그대로 돌려준다(임의 해석하지 않는다).
- */
-export function formatScoreWithTeams(score: string | null | undefined, teams: Teams | null): string | null {
-  if (!score) return null;
-  const m = score.match(/^(\d+)\s*[-:]\s*(\d+)$/);
-  if (!m || !teams) return score;
-  return `${teams.away} ${m[1]} : ${m[2]} ${teams.home}`;
-}

@@ -15,14 +15,16 @@
  *    있다: `agent-compose/src/render/client.py`. 우리 큐의 몫은 순번 가시화·1:1 강제·중복 차단.)
  *
  * 편성 1건 : 하이라이트 1건 규칙:
- *   렌더 레인은 `compId` 를 **중복 키**로 쓴다. 같은 편성을 두 번 넣으려 하면 새 항목을
+ *   렌더 레인은 **`vId:compId` 쌍**을 중복 키로 쓴다(2026-09-02 — comp_id 가 영상 안에서만
+ *   유일해져 단독으로는 키가 못 된다. compId 만 쓰면 서로 다른 영상의 "편성 #1" 이 한 건으로
+ *   합쳐진다). 같은 편성을 두 번 넣으려 하면 새 항목을
  *   만들지 않고 **기존 티켓을 그대로 돌려준다**(멱등). 이미 만들어진 편성은 라우트가
  *   접수 전에 걸러내고, 대기 중에 만들어져 버린 경우는 실행 직전 재확인이 잡는다.
  *
  * ⚠️ **단일 프로세스 전제.** 상태가 프로세스 메모리에 있다. PM2 클러스터·다중 인스턴스로
  *   띄우면 큐가 프로세스마다 따로 생겨 무력해진다(DEPLOY_GUIDE.md — systemd 단일 프로세스 고정).
  * ⚠️ **재시작하면 대기분은 사라진다**(결정 2026-08-24 — 메모리 전용). 진행 중이던 렌더는
- *   `t_compose.render_status=1` 로 복원한다(`ensureAdopted`). 진행 중이던 편성은 agent 에
+ *   `t_compose.status_code=4050` 으로 복원한다(`ensureAdopted`). 진행 중이던 편성은 agent 에
  *   "도는 잡 목록" 엔드포인트가 없어 복원할 수 없다 — 결과는 DB 에 남으므로 편성 목록에서 보인다.
  *
  * server-only.
@@ -30,6 +32,7 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { createLogger } from "./log";
+import { CODE } from "@/lib/domain/status";
 import {
   AgentError,
   COMPOSE_TIMEOUT_MS,
@@ -39,7 +42,8 @@ import {
   startComposeJob,
 } from "./compose-agent";
 import { findComposeSince } from "./composes";
-import { findRunningRender, readRenderState } from "./render-status";
+import { findRunningRender, isRenderFailed, isRendering, readRenderState } from "./render-status";
+import { exists, renderKey } from "./s3";
 
 const log = createLogger("queue");
 
@@ -61,9 +65,9 @@ export const RETRY_AFTER_SEC = 300;
 const FINISHED_MAX = 30;
 
 /**
- * 렌더 접수 직후 유예(ms). 직전 실패(`render_status=-1`)가 남아 있는 편성을 다시 렌더하면
- * agent 가 1 로 덮기 전에 우리가 -1 을 먼저 읽어 **방금 시작한 렌더를 실패로 단정**할 수 있다.
- * 그래서 진행(1)을 한 번이라도 본 뒤에만 종결 값을 신뢰하고, 그 전에는 이 시간까지 기다린다.
+ * 렌더 접수 직후 유예(ms). 직전 실패(4950)가 남아 있는 편성을 다시 렌더하면 agent 가
+ * 4050 으로 덮기 전에 우리가 4950 을 먼저 읽어 **방금 시작한 렌더를 실패로 단정**할 수 있다.
+ * 그래서 진행(4050)을 한 번이라도 본 뒤에만 종결 값을 신뢰하고, 그 전에는 이 시간까지 기다린다.
  */
 const RENDER_GRACE_MS = 30_000;
 
@@ -93,7 +97,7 @@ export interface QueueItem {
   error?: string;
   /** 서버 재시작 전에 시작돼 DB 로 복원한 항목(요청자를 알 수 없다). */
   adopted?: boolean;
-  /** 렌더 진행(`render_status=1`)을 한 번이라도 관측했는가 — 유예 판정용. */
+  /** 렌더 진행(`status_code=4050`)을 한 번이라도 관측했는가 — 유예 판정용. */
   observedRunning?: boolean;
   /** 렌더 접수(agent 202)가 끝난 시각. 유예는 이 시각부터 센다 — tickRender 주석 참조. */
   acceptedAt?: number;
@@ -269,15 +273,15 @@ export function enqueueCompose(p: {
 }
 
 /**
- * 렌더 접수 — 같은 `compId` 가 이미 큐에 있으면 **새로 만들지 않고 그 티켓을 돌려준다**
- * (편성 1 : 하이라이트 1). `dedup:true` 로 그 사실을 알린다.
+ * 렌더 접수 — 같은 **편성(`vId`+`compId`)** 이 이미 큐에 있으면 **새로 만들지 않고 그 티켓을
+ * 돌려준다**(편성 1 : 하이라이트 1). `dedup:true` 로 그 사실을 알린다.
  */
 export function enqueueRender(p: {
   compId: number;
   vId: number;
   bumper: boolean;
 }): ItemView & { dedup: boolean } {
-  const existing = findRenderItem(p.compId);
+  const existing = findRenderItem(p.vId, p.compId);
   if (existing) return { ...view(existing), dedup: true };
 
   return {
@@ -296,16 +300,20 @@ export function enqueueRender(p: {
   };
 }
 
-/** 렌더 레인에서 이 편성의 대기·진행 항목을 찾는다(완료분은 보지 않는다). */
-function findRenderItem(compId: number): QueueItem | null {
+/**
+ * 렌더 레인에서 이 편성의 대기·진행 항목을 찾는다(완료분은 보지 않는다).
+ * ⚠️ `vId` 를 같이 비교해야 한다 — comp_id 만 보면 다른 영상의 같은 번호 편성과 겹친다.
+ */
+function findRenderItem(vId: number, compId: number): QueueItem | null {
   const lane = lanes.render;
-  if (lane.running?.compId === compId) return lane.running;
-  return lane.pending.find((i) => i.compId === compId) ?? null;
+  const same = (i: QueueItem) => i.vId === vId && i.compId === compId;
+  if (lane.running && same(lane.running)) return lane.running;
+  return lane.pending.find(same) ?? null;
 }
 
 /** 이 편성의 렌더가 지금 큐에 있는지 — 라우트가 멱등 응답을 만들 때 쓴다. */
-export function findRenderTicket(compId: number): ItemView | null {
-  const item = findRenderItem(compId);
+export function findRenderTicket(vId: number, compId: number): ItemView | null {
+  const item = findRenderItem(vId, compId);
   return item ? view(item) : null;
 }
 
@@ -439,26 +447,29 @@ async function dispatchCompose(item: QueueItem): Promise<void> {
 
 async function dispatchRender(lane: Lane, item: QueueItem): Promise<void> {
   const compId = item.compId;
+  const vId = item.vId;
   if (compId == null) return finish(lane, item, "error", { error: "대상 편성이 없습니다." });
 
   // 대기하는 동안 상황이 바뀔 수 있다 — 다른 창에서 먼저 만들었거나 이미 돌고 있을 수 있다.
-  const cur = await readRenderState(compId);
+  const cur = await readRenderState(vId, compId);
   if (!cur) return finish(lane, item, "error", { error: "편성을 찾을 수 없습니다." });
-  if (cur.renderedAt) {
-    log.info("렌더 생략 — 이미 만들어져 있음", { ticketId: item.ticketId, compId });
-    return finish(lane, item, "done", { outcome: "ok" });
-  }
-  if (cur.renderStatus === 1) {
+  if (isRendering(cur.statusCode)) {
     // 이미 진행 중(다른 경로 접수·재시작 전 요청) — 새로 접수하지 않고 완료만 지켜본다.
     item.observedRunning = true;
-    log.info("렌더 감시만 — 이미 진행 중", { ticketId: item.ticketId, compId });
+    log.info("렌더 감시만 — 이미 진행 중", { ticketId: item.ticketId, vId, compId });
     return;
+  }
+  // "이미 만들어져 있는가"는 DB 로 알 수 없다 — `status_code=4000` 은 편성 완료와 렌더 완료를
+  // 구분하지 못한다(2026-09-02 스키마 교체). 산출물 존재는 S3 가 유일한 근거다.
+  if (await exists(renderKey(vId, compId)).catch(() => false)) {
+    log.info("렌더 생략 — 이미 만들어져 있음", { ticketId: item.ticketId, vId, compId });
+    return finish(lane, item, "done", { outcome: "ok" });
   }
 
   try {
-    await acceptRender(compId, item.bumper ?? true);
+    await acceptRender(vId, compId, item.bumper ?? true);
     item.acceptedAt = Date.now();
-    log.info("렌더 시작", { ticketId: item.ticketId, compId, bumper: item.bumper });
+    log.info("렌더 시작", { ticketId: item.ticketId, vId, compId, bumper: item.bumper });
   } catch (e) {
     if (e instanceof AgentError) {
       switch (e.code) {
@@ -563,11 +574,12 @@ async function tickCompose(lane: Lane, item: QueueItem): Promise<void> {
 
 async function tickRender(lane: Lane, item: QueueItem): Promise<void> {
   const compId = item.compId;
+  const vId = item.vId;
   if (compId == null) return finish(lane, item, "error", { error: "대상 편성이 없습니다." });
 
   let st;
   try {
-    st = await readRenderState(compId);
+    st = await readRenderState(vId, compId);
   } catch (e) {
     // DB 일시 장애 — 다음 주기에 다시 본다.
     log.warn("렌더 감시 실패 — 다음 주기에 재시도", { ticketId: item.ticketId, message: String(e) });
@@ -575,15 +587,16 @@ async function tickRender(lane: Lane, item: QueueItem): Promise<void> {
   }
   if (!st) return finish(lane, item, "error", { error: "편성을 찾을 수 없습니다." });
 
-  if (st.renderStatus === 1) {
+  if (isRendering(st.statusCode)) {
     item.observedRunning = true;
     return;
   }
-  if (st.renderedAt || st.renderStatus === 0) {
-    return finish(lane, item, "done", { outcome: "ok" });
-  }
+  // 4050 → 4000 으로 돌아왔으면 렌더가 끝난 것이다. 다만 **접수 전부터 4000 이었을 수도**
+  // 있으므로(4000 은 편성 완료와 렌더 완료를 구분하지 못한다) 진행을 관측했거나 유예가
+  // 지난 뒤에만 종결로 읽는다 — 아래 `settled` 검사가 그 역할을 한다.
+  const done = st.statusCode === CODE.COMPOSE_OK;
 
-  // 여기부터는 실패(-1) 또는 미기록(null). 아직 종결로 볼 수 없는 두 경우를 먼저 걸러낸다.
+  // 여기부터는 완료(4000) 또는 실패(4950/4960). 아직 종결로 볼 수 없는 두 경우를 먼저 걸러낸다.
   //   · 접수(agent 202)가 아직 안 끝났다 — 접수는 최대 60초까지 걸릴 수 있는데(워커가 느릴 때)
   //     그동안 "접수되지 않았다"고 단정하면 **실제로는 시작될 렌더의 슬롯을 놓아 버린다.**
   //   · 접수 직후라 agent 가 아직 1 을 쓰기 전이다 — 직전 실패값(-1)이 남아 있으면 방금 시작한
@@ -593,12 +606,27 @@ async function tickRender(lane: Lane, item: QueueItem): Promise<void> {
     (item.acceptedAt != null && Date.now() - item.acceptedAt > RENDER_GRACE_MS);
   if (!settled) return;
 
-  if (st.renderStatus === -1) {
+  if (isRenderFailed(st.statusCode)) {
     return finish(lane, item, "error", {
       error: "영상을 만들지 못했습니다. 잠시 후 다시 시도해 주세요.",
     });
   }
-  // null 인데 유예도 지났다 — 접수 기록조차 없다는 뜻이라 감추지 않고 드러낸다.
+  if (done) {
+    // ⚠️ 상태코드만으로 "성공"을 단정하지 않는다 — 4000 은 편성 완료와 렌더 완료를 구분하지
+    //    못하므로(2026-09-02) 산출물을 실제로 확인해야 한다. 예전 `render_datetime` 이
+    //    해 주던 증명을 S3 가 대신한다. 종결 전환에서 한 번만 부르므로 tick 마다 도는 비용이
+    //    아니다. 여기서 확인하지 않으면 "준비됨"이라고 알린 뒤 상세 화면엔 영상이 없다.
+    if (await exists(renderKey(vId, compId)).catch(() => false)) {
+      return finish(lane, item, "done", { outcome: "ok" });
+    }
+    log.warn("완료 기록은 있으나 산출물 없음", { ticketId: item.ticketId, vId, compId });
+    return finish(lane, item, "error", {
+      error: "영상 생성이 끝났다는 기록은 있으나 결과물을 찾지 못했습니다. 다시 시도해 주세요.",
+    });
+  }
+
+  // 4000·4950 어느 쪽도 아닌 채 유예가 지났다 — 편성 국면 코드로 되돌아가 있다는 뜻이라
+  // 렌더 요청이 먹히지 않은 것이다. 감추지 않고 드러낸다.
   return finish(lane, item, "error", {
     error: "영상 생성 요청이 접수되지 않았습니다. 다시 시도해 주세요.",
   });
@@ -693,7 +721,7 @@ async function adopt(): Promise<void> {
   lane.running = item;
   index.set(item.ticketId, item);
   startWatch(lane);
-  // 고아 행(재기동으로 감시가 끊긴 채 1 로 남은 것)일 수도 있다. 그러면 TTL(약 12분)이
+  // 고아 행(재기동으로 감시가 끊긴 채 4050 으로 남은 것)일 수도 있다. 그러면 TTL(약 12분)이
   // 슬롯을 되돌린다 — agent 의 `_reconcile` 이 다음 렌더 요청 때 그 행을 정정한다.
   log.warn("진행 중 렌더 복원", { compId: r.compId, vId: r.vId, ticketId: item.ticketId });
 }

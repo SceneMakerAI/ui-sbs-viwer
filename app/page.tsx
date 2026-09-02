@@ -17,7 +17,10 @@ export default async function DashboardPage() {
   const metrics = [
     { label: "업로드 영상", value: summary.videos },
     { label: "편성 클립", value: summary.composes },
-    { label: "완성 영상", value: summary.rendered },
+    // "완성 영상"(mp4 존재)은 DB 로 셀 수 없게 됐다 — render_datetime 컬럼이 삭제됐고
+    // status_code 4000 은 편성 완료와 렌더 완료를 구분하지 못한다(2026-09-02).
+    // 셀 수 있는 것만 말한다.
+    { label: "편성 완료", value: summary.completed },
   ];
 
   return (

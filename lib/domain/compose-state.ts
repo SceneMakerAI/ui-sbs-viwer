@@ -1,51 +1,61 @@
 /**
  * 편성 1건의 표시 상태 — 목록 배지와 상세 화면이 **같은 판정**을 쓰도록 한 곳에 둔다.
  *
- * 우선순위(2026-08-20 확정):
- *   1단계 `t_compose.status`        클립 편성 자체가 끝났는가 — 진행 중·실패·장면 없음이면 여기서 끝.
- *   2단계 `t_compose.render_status` 편성이 `ok` 로 끝난 뒤에야 영상(렌더) 상태를 말한다.
+ * ⚠️ 2026-09-02 스키마 교체 — 판정 근거가 통째로 바뀌었다.
+ *   · 예전: `t_compose.status`(varchar) + `render_status`/`render_datetime` 두 컬럼.
+ *   · 지금: **`t_compose.status_code` 하나**(t_code 4000번대). 렌더 컬럼 2개는 **삭제**됐다.
  *
- * 순서를 지키는 이유: 편성이 아직 도는 중인데 렌더 컬럼이 비어 있다고 "클립 편성 완료"라고
- * 말하면 거짓이 된다. 영상 상태는 **클립이 확정된 뒤에만** 의미가 있다.
+ * 상태코드가 편성·렌더 국면을 모두 들고 있다:
+ *   4001         빈 편성(조건에 맞는 장면 없음)
+ *   4010~4040    편성 진행(색인·선곡·컷·검수)
+ *   4050         렌더링 진행
+ *   4900~4920    편성 실패
+ *   4950·4960    렌더 실패(편성 자체는 남아 있다 — 렌더만 다시 요청할 수 있다)
+ *   4000         완료
  *
- * 판정은 `t_compose` 컬럼만 본다 — S3 조회 없이 DB 한 번이다.
+ * ⚠️ **4000 은 "mp4 가 있다"는 뜻이 아니다.** t_code 4000 은 편성과 렌더의 공통 종료 코드라
+ * "편성만 끝난 것"과 "렌더까지 끝난 것"을 구분하지 못한다(실측 2026-09-02: 렌더된 8건과
+ * 렌더 안 된 19건이 **모두 4000**). 그래서 산출물 존재는 **S3 확인이 유일한 근거**이고,
+ * `composePhase` 는 그 결과를 `hasRender` 인자로 받는다. 목록처럼 영상마다 S3 를 조회할 수
+ * 없는 자리는 인자를 주지 않고 "클립 편성 완료"까지만 말한다 — 없는 근거로 단정하지 않는다.
+ *
+ * 판정은 `t_compose` 컬럼만 본다 — S3 조회 없이 DB 한 번이다(hasRender 를 주는 상세 화면 제외).
  * 클라이언트 컴포넌트에서도 import 하므로 server-only 를 붙이지 않는다.
  */
 import type { Compose } from "@/lib/types";
+import { CODE, isErrorCode } from "@/lib/domain/status";
 
 export type ComposePhase =
   | "composing" // 클립 편성 중
   | "compose_failed" // 클립 편성 실패
   | "empty" // 조건에 맞는 장면 없음
-  | "composed" // 편성 완료, 영상은 만든 적 없음
+  | "composed" // 편성 완료, 영상은 아직 없음(또는 존재 여부를 모름)
   | "rendering" // 영상 만드는 중
-  | "ready" // 영상 준비됨
+  | "ready" // 영상 준비됨 — S3 에 산출물이 있는 것을 확인한 경우에만
   | "render_failed"; // 영상 생성 실패
 
-/** `t_compose.status` 중 "편성이 아직 끝나지 않았다"는 값들. */
-const COMPOSE_RUNNING = new Set(["running", "pending", "progress", "processing"]);
-/** `t_compose.status` 중 "편성이 실패했다"는 값들. */
-const COMPOSE_FAILED = new Set(["error", "fail", "failed"]);
+/**
+ * @param hasRender S3 에서 렌더본 존재를 **확인한** 경우에만 true/false 를 준다.
+ *                  확인하지 않았으면 생략한다(= 모름 → "ready" 로 올라가지 않는다).
+ */
+export function composePhase(compose: Compose, hasRender?: boolean): ComposePhase {
+  const code = compose.statusCode;
 
-export function composePhase(compose: Compose): ComposePhase {
-  // ── 1단계: 클립 편성 상태 ──
-  const status = compose.status?.toLowerCase() ?? "";
-  if (COMPOSE_RUNNING.has(status)) return "composing";
-  if (COMPOSE_FAILED.has(status)) return "compose_failed";
-  if (status === "empty" || compose.clipCount === 0) return "empty";
-
-  // ── 2단계: 영상(렌더) 상태 — 값 규약은 t_code.result 와 같다(1=진행 중, 0=성공, -1=실패) ──
-  switch (compose.renderStatus) {
-    case 0:
-      return "ready";
-    case 1:
-      return "rendering";
-    case -1:
-      return "render_failed";
-    default:
-      // NULL = 영상을 만든 적 없음. 컬럼이 생기기 전에 렌더된 옛 편성은 완료 시각으로 구제한다.
-      return compose.renderedAt !== null ? "ready" : "composed";
+  // ── 실패 — 렌더 실패는 편성 실패와 구분한다(편성은 살아 있어 재렌더만 하면 된다) ──
+  if (isErrorCode(code)) {
+    return code === CODE.COMPOSE_ERROR_RENDER || code === CODE.COMPOSE_ERROR_STAMP
+      ? "render_failed"
+      : "compose_failed";
   }
+
+  // ── 진행 — 4050 만 렌더 국면이고 나머지 진행 코드는 편성 국면이다 ──
+  if (code === CODE.COMPOSE_RENDERING) return "rendering";
+  if (code !== CODE.COMPOSE_OK && code !== CODE.COMPOSE_EMPTY) return "composing";
+
+  // ── 종료 ──
+  if (code === CODE.COMPOSE_EMPTY || compose.clipCount === 0) return "empty";
+  // 4000 은 편성 완료까지만 보장한다. 산출물은 확인된 경우에만 "준비됨"이다.
+  return hasRender ? "ready" : "composed";
 }
 
 /**
@@ -72,7 +82,10 @@ const TONE: Record<ComposePhase, string> = {
   render_failed: "bg-danger-soft text-danger",
 };
 
-export function composeBadge(compose: Compose): { phase: ComposePhase; text: string; tone: string } {
-  const phase = composePhase(compose);
+export function composeBadge(
+  compose: Compose,
+  hasRender?: boolean,
+): { phase: ComposePhase; text: string; tone: string } {
+  const phase = composePhase(compose, hasRender);
   return { phase, text: LABEL[phase], tone: TONE[phase] };
 }

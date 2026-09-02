@@ -1,7 +1,7 @@
 import { FileQuestion } from "lucide-react";
 import StatusScreen from "@/components/StatusScreen";
 
-/** `/c/[cid]` 전용 404 — 편성이 삭제됐거나 없는 comp_id 로 들어온 경우. */
+/** `/v/[vid]/c/[cid]` 전용 404 — 편성이 삭제됐거나 없는 (v_id, comp_id) 조합으로 들어온 경우. */
 export default function ComposeNotFound() {
   return (
     <StatusScreen

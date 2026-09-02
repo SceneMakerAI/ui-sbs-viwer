@@ -13,7 +13,7 @@ import type { Compose, VideoGroup } from "@/lib/types";
  *
  * 규칙(확정 2026-08-24, PAGES.md §2-3):
  *   · 펼침은 한 번에 하나(아코디언). 다른 영상을 누르면 앞의 것이 접힌다.
- *   · **카드를 누르면 곧바로 재생 화면(`/c/[cid]`)으로 간다.** 선택 상태를 따로 두지 않는다 —
+ *   · **카드를 누르면 곧바로 재생 화면(`/v/[vid]/c/[cid]`)으로 간다.** 선택 상태를 따로 두지 않는다 —
  *     초안에는 "선택 후 [재생] 버튼"이 있었으나 한 번 더 누르게 만들 이유가 없어 걷어냈다.
  *     그래서 카드는 버튼이 아니라 **링크**다(새 탭으로 열기·주소 복사가 그대로 된다).
  *   · 화살표는 순수 스크롤 컨트롤이다 — 한 번에 한 화면씩 밀고, 양 끝에서 비활성.
@@ -123,7 +123,7 @@ export default function ClipGroupList({
                   <span className="text-xs text-text-muted">
                     {g.composeCount === 0
                       ? "아직 편성한 클립이 없습니다"
-                      : `클립 영상 ${g.readyCount}건 준비됨`}
+                      : `편성 완료 ${g.readyCount}건`}
                   </span>
                   {q && g.matchCount < g.composeCount && (
                     <span className="text-xs text-text-muted">· {g.matchCount}건 일치</span>
@@ -278,7 +278,7 @@ function ClipCard({ compose }: { compose: Compose }) {
   const badge = composeBadge(compose);
   return (
     <Link
-      href={`/c/${compose.compId}`}
+      href={`/v/${compose.vId}/c/${compose.compId}`}
       className="flex w-[236px] shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-surface transition-colors hover:border-brand-blue focus-visible:border-brand-blue focus-visible:outline-none"
     >
       <span className="relative block">
@@ -307,7 +307,7 @@ function ClipRow({ compose }: { compose: Compose }) {
   const badge = composeBadge(compose);
   return (
     <Link
-      href={`/c/${compose.compId}`}
+      href={`/v/${compose.vId}/c/${compose.compId}`}
       className="flex w-full items-center gap-2.5 rounded-md border border-line bg-surface p-2 transition-colors hover:border-brand-blue"
     >
       <Thumb vId={compose.vId} compId={compose.compId} alt="" className="aspect-video w-22 shrink-0 rounded" />

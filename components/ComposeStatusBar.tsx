@@ -78,7 +78,7 @@ export default function ComposeStatusBar() {
         {composeDone.state === "done" && composeDone.outcome !== "empty" && composeDone.compId ? (
           <>
             <span className="min-w-0 flex-1 truncate font-bold text-brand-blue">클립 편성이 끝났습니다</span>
-            <Action href={`/c/${composeDone.compId}`} onClick={() => close(composeDone.ticketId)}>
+            <Action href={`/v/${composeDone.vId}/c/${composeDone.compId}`} onClick={() => close(composeDone.ticketId)}>
               결과 보기
             </Action>
           </>
@@ -104,7 +104,7 @@ export default function ComposeStatusBar() {
             <span className="text-text-muted"> · 대기 {queue.render.waiting}건</span>
           )}
         </span>
-        {renderRun.compId != null && <Action href={`/c/${renderRun.compId}`}>편성 보기</Action>}
+        {renderRun.compId != null && <Action href={`/v/${renderRun.vId}/c/${renderRun.compId}`}>편성 보기</Action>}
       </Row>,
     );
   } else if (renderDone && !dismissed.includes(renderDone.ticketId)) {
@@ -114,7 +114,7 @@ export default function ComposeStatusBar() {
           <>
             <span className="min-w-0 flex-1 truncate font-bold text-brand-blue">클립 영상이 준비됐습니다</span>
             {renderDone.compId != null && (
-              <Action href={`/c/${renderDone.compId}`} onClick={() => close(renderDone.ticketId)}>
+              <Action href={`/v/${renderDone.vId}/c/${renderDone.compId}`} onClick={() => close(renderDone.ticketId)}>
                 보러 가기
               </Action>
             )}

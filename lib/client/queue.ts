@@ -66,12 +66,16 @@ export function isActive(t: Ticket | null | undefined): boolean {
 /**
  * 티켓은 **대상별로** 따로 기억한다 — 영상 A 를 편성해 두고 영상 B 로 옮겼을 때
  * B 의 폼에 A 의 진행이 뜨면 안 된다.
+ *
+ * ⚠️ `target` 이 문자열도 되는 이유: 렌더는 편성 1건을 가리키는데 comp_id 가 영상 안에서만
+ * 유일해져(2026-09-02) **`"{vId}:{compId}"` 쌍**을 키로 써야 한다. comp_id 만 쓰면 서로 다른
+ * 영상의 "편성 #1" 이 같은 칸을 덮어쓴다. 편성 레인은 그대로 v_id(숫자)를 쓴다.
  */
-function key(kind: QueueKind, target: number): string {
+function key(kind: QueueKind, target: number | string): string {
   return `sbs.ticket.${kind}.${target}`;
 }
 
-export function rememberTicket(kind: QueueKind, target: number, ticketId: string): void {
+export function rememberTicket(kind: QueueKind, target: number | string, ticketId: string): void {
   try {
     localStorage.setItem(key(kind, target), ticketId);
   } catch {
@@ -79,7 +83,7 @@ export function rememberTicket(kind: QueueKind, target: number, ticketId: string
   }
 }
 
-export function readTicket(kind: QueueKind, target: number): string | null {
+export function readTicket(kind: QueueKind, target: number | string): string | null {
   try {
     return localStorage.getItem(key(kind, target));
   } catch {
@@ -87,7 +91,7 @@ export function readTicket(kind: QueueKind, target: number): string | null {
   }
 }
 
-export function forgetTicket(kind: QueueKind, target: number): void {
+export function forgetTicket(kind: QueueKind, target: number | string): void {
   try {
     localStorage.removeItem(key(kind, target));
   } catch {
@@ -148,7 +152,8 @@ export function postCompose(p: {
   return post("/api/compose", p);
 }
 
-export function postRender(p: { compId: number; bumper: boolean }): Promise<SubmitResult> {
+/** ⚠️ `vId` 필수 — comp_id 만으로는 편성이 특정되지 않는다(복합키). */
+export function postRender(p: { vId: number; compId: number; bumper: boolean }): Promise<SubmitResult> {
   return post("/api/render", p);
 }
 

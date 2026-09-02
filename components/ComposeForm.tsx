@@ -49,7 +49,7 @@ export default function ComposeForm({ vId }: { vId: number }) {
     forgetTicket("compose", vId); // 끝난 티켓을 다음 방문까지 들고 있을 이유가 없다
     if (ticket.state === "done" && ticket.outcome !== "empty" && ticket.compId && !pushed.current) {
       pushed.current = true;
-      router.push(`/c/${ticket.compId}`);
+      router.push(`/v/${ticket.vId}/c/${ticket.compId}`);
     }
   }, [ticket, router, vId]);
 
