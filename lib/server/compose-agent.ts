@@ -28,6 +28,24 @@ export const COMPOSE_TIMEOUT_MS = Number(process.env.COMPOSE_TIMEOUT_MS ?? 1_500
 /** 렌더 1건이 걸릴 수 있는 최대 시간(ms) — 같은 용도. */
 export const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS ?? 660_000);
 
+/**
+ * 하이라이트 영상 **만들기** 기능 스위치 — 기본 **꺼짐**(2026-09-02 결정).
+ *
+ * 왜 껐나: 상류 agent-compose 가 교체된 스키마를 아직 못 따라와 `POST /api/v1/render` 가
+ * 삭제된 컬럼을 읽고 500(`INTERNAL_ERROR`)을 낸다. 이 상태로 버튼을 열어 두면 사용자는
+ * 눌러 놓고 몇 분을 기다린 끝에 실패만 본다 — **눌리지 않는 편이 정직하다.**
+ * 게다가 `RenderRequest` 가 아직 `comp_id` 만 받아, 통하더라도 어느 영상의 편성인지
+ * 특정되지 않는다(REQUEST_agent-compose.md [요청 3]).
+ *
+ * 되살리는 법: 상류가 고쳐지면 **환경변수 `RENDER_ENABLED=1` 만 주고 재기동**하면 된다
+ * (코드 수정·재배포 불필요 — NEXT_PUBLIC_ 이 아니라 서버에서 읽어 화면에 내려보내므로
+ * 빌드 타임에 박히지 않는다). 되살리기 전에 렌더 1건을 실제로 돌려 확인할 것.
+ *
+ * ⚠️ 이 값은 **화면과 라우트 양쪽에서** 본다. 버튼만 감추면 직접 POST 로 큐에 들어가
+ * 렌더 레인이 실패 작업으로 막힌다.
+ */
+export const RENDER_ENABLED = process.env.RENDER_ENABLED === "1";
+
 /* ── 진행 단계 표기 ──────────────────────────────────────────────── */
 
 /**

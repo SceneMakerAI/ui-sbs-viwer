@@ -5,6 +5,7 @@ import ClipPlayer from "@/components/ClipPlayer";
 import { formatDate, formatDuration } from "@/lib/format";
 import { getCompose, getTeams, listClips } from "@/lib/server/composes";
 import { composePhase } from "@/lib/domain/compose-state";
+import { RENDER_ENABLED } from "@/lib/server/compose-agent";
 import { getVideoDir } from "@/lib/server/videos";
 import { exists, presignGet, renderKey, sourceKey } from "@/lib/server/s3";
 
@@ -101,6 +102,7 @@ export default async function ComposeResultPage({
           compose={compose}
           clips={clips}
           phase={phase}
+          renderEnabled={RENDER_ENABLED}
           sourceUrl={sourceUrl}
           renderUrl={renderUrl}
         />

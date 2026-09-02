@@ -6,6 +6,7 @@ import {
   ensureAdopted,
   findRenderTicket,
 } from "@/lib/server/queue";
+import { RENDER_ENABLED } from "@/lib/server/compose-agent";
 import { getCompose } from "@/lib/server/composes";
 import { isRendering } from "@/lib/server/render-status";
 import { composePhase } from "@/lib/domain/compose-state";
@@ -40,6 +41,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
   const { vId, compId, bumper } = parsed.data;
+
+  // 기능 스위치가 꺼져 있으면 여기서 끝낸다 — 화면이 버튼을 감추더라도 직접 POST 는 막아야
+  // 한다. 그러지 않으면 반드시 실패할 작업이 렌더 레인을 차지한다(compose-agent.ts 주석).
+  if (!RENDER_ENABLED) {
+    log.info("렌더 접수 거절 — 기능 일시 중지", { vId, compId });
+    return NextResponse.json(
+      {
+        code: "RENDER_DISABLED",
+        error: "지금은 하이라이트 영상 만들기를 일시적으로 중지했습니다. 편성 클립은 원본 구간 재생으로 확인하실 수 있습니다.",
+      },
+      { status: 503 },
+    );
+  }
 
   // 재시작 전에 시작된 렌더가 있으면 슬롯을 먼저 되돌린다 — 워커에 겹쳐 넣지 않기 위해.
   await ensureAdopted();

@@ -28,12 +28,15 @@ export default function ClipPlayer({
   compose,
   clips,
   phase,
+  renderEnabled,
   sourceUrl,
   renderUrl,
 }: {
   compose: Compose;
   clips: Clip[];
   phase: ComposePhase;
+  /** 하이라이트 영상 만들기 기능 스위치(서버가 판단해 내려준다 — compose-agent.ts). */
+  renderEnabled: boolean;
   sourceUrl: string | null;
   renderUrl: string | null;
 }) {
@@ -207,6 +210,17 @@ export default function ClipPlayer({
               <span className="flex items-center gap-1.5 rounded px-4 py-1.5 text-sm text-text-muted">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
                 하이라이트 영상 만드는 중
+              </span>
+            ) : canRender && !renderEnabled ? (
+              /* 만들기를 일시 중지한 상태 — 상류 렌더 API 가 복구될 때까지다
+                 (RENDER_ENABLED, lib/server/compose-agent.ts). 눌러도 실패할 버튼을 열어 두는
+                 것보다 못 누르게 하고 이유를 말하는 편이 낫다. 버튼이 아니라 안내라서
+                 <button disabled> 이 아니라 <span> 이다 — 누를 것이 없다. */
+              <span
+                title="영상 생성 기능을 점검하고 있습니다. 복구되면 다시 만들 수 있습니다."
+                className="rounded px-4 py-1.5 text-sm text-text-muted opacity-60"
+              >
+                하이라이트 영상 만들기 일시 중지
               </span>
             ) : canRender ? (
               <RenderOptionDialog
